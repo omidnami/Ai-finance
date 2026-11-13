@@ -6,11 +6,11 @@ from .experiment import Settings, predict, train
 
 
 def main():
-    parser = argparse.ArgumentParser(description="AI Finance: CPU-only neural network v0.1")
+    parser = argparse.ArgumentParser(description="AI Finance: CPU-only neural network v0.2")
     actions = parser.add_subparsers(dest="action", required=True)
     training = actions.add_parser("train", help="Train and evaluate on chronological splits")
-    training.add_argument("--data", "--csv", "--excel", dest="data", required=True, help="MetaTrader 15-minute .csv/.xlsx/.xls export")
-    training.add_argument("--out", default="models/finance-v0.1")
+    training.add_argument("--data", "--csv", "--excel", dest="data", required=True, help="MetaTrader M15 .csv/.xlsx/.xls export")
+    training.add_argument("--out", default="models/finance-v0.2")
     training.add_argument("--epochs", type=int, default=100)
     training.add_argument("--batch-size", type=int, default=64)
     training.add_argument("--lr", type=float, default=0.001)
@@ -18,7 +18,7 @@ def main():
     training.add_argument("--seeds", type=int, nargs="+", default=[13, 42, 97])
     prediction = actions.add_parser("predict", help="Predict after the latest completed candle")
     prediction.add_argument("--data", "--csv", "--excel", dest="data", required=True)
-    prediction.add_argument("--model", default="models/finance-v0.1")
+    prediction.add_argument("--model", default="models/finance-v0.2")
     args = parser.parse_args()
     if args.action == "train":
         output = train(args.data, args.out, Settings(epochs=args.epochs, batch_size=args.batch_size,

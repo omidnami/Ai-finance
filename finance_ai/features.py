@@ -26,6 +26,7 @@ class PreparedData:
     timestamps: np.ndarray
     features: np.ndarray
     closes: np.ndarray
+    atr14_ratio: np.ndarray | None = None
 
 
 def _sessions(timestamp: pd.Timestamp) -> tuple[float, float, float]:
@@ -44,7 +45,7 @@ def read_candles(path: str | Path) -> pd.DataFrame:
     path = Path(path)
     suffix = path.suffix.lower()
     if suffix == ".csv":
-        # MetaTrader exports can be comma- or tab-separated despite the .csv suffix.
+        # MetaTrader CSV exports are often tab-separated.
         frame = pd.read_csv(path, sep=None, engine="python", encoding="utf-8-sig")
     elif suffix in {".xlsx", ".xls"}:
         frame = pd.read_excel(path)
@@ -79,6 +80,7 @@ def read_candles(path: str | Path) -> pd.DataFrame:
 def prepare(path: str | Path) -> PreparedData:
     from ta.momentum import RSIIndicator
     from ta.trend import MACD, SMAIndicator
+    from ta.volatility import AverageTrueRange
 
     df = read_candles(path)
     if len(df) < 100:
@@ -89,6 +91,8 @@ def prepare(path: str | Path) -> PreparedData:
     rsi = RSIIndicator(close, window=14, fillna=False).rsi()
     sma20 = SMAIndicator(close, window=20, fillna=False).sma_indicator()
     sma50 = SMAIndicator(close, window=50, fillna=False).sma_indicator()
+    atr = AverageTrueRange(df["high"].astype(float), df["low"].astype(float), close,
+                           window=14, fillna=False).average_true_range() / close
     time = pd.to_datetime(df["time"], unit="s", utc=True)
     hours = time.dt.hour + time.dt.minute / 60.0
     weekdays = time.dt.weekday
@@ -128,6 +132,7 @@ def prepare(path: str | Path) -> PreparedData:
         timestamps=df["time"].to_numpy(dtype=np.int64)[first:],
         features=f.to_numpy(dtype=np.float64)[first:],
         closes=close.to_numpy(dtype=np.float64)[first:],
+        atr14_ratio=atr.to_numpy(dtype=np.float64)[first:],
     )
 
 
@@ -147,3 +152,30 @@ def latest_window(data: PreparedData, lookback: int = LOOKBACK) -> np.ndarray:
     if len(data.features) < lookback:
         raise ValueError("Not enough completed candles for inference")
     return data.features[-lookback:]
+
+
+def labeled_windows_v2(data: PreparedData, lookback: int = LOOKBACK):
+    """v0.2: same 24-feature windows + five trend summaries per window."""
+    from .trend import summary_at
+
+    if lookback != 20:
+        raise ValueError("v0.2 trend features require a 20-candle lookback")
+    if data.atr14_ratio is None:
+        raise ValueError("ATR data is required for v0.2")
+    x, y, target_times = labeled_windows(data, lookback)
+    extras = np.array([summary_at(data.closes, data.atr14_ratio, end)
+                       for end in range(lookback - 1, len(data.closes) - 1)])
+    return x, extras, y, target_times
+
+
+def latest_window_v2(data: PreparedData, lookback: int = LOOKBACK):
+    """Return exactly the same causal inputs used during v0.2 training."""
+    from .trend import summary_at
+
+    if lookback != 20:
+        raise ValueError("v0.2 trend features require a 20-candle lookback")
+    if data.atr14_ratio is None:
+        raise ValueError("ATR data is required for v0.2")
+    x = latest_window(data, lookback)
+    extra = summary_at(data.closes, data.atr14_ratio, len(data.closes) - 1)
+    return x, extra

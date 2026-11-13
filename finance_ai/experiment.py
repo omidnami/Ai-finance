@@ -7,7 +7,9 @@ from pathlib import Path
 
 import numpy as np
 
-from .features import FEATURE_NAMES, LOOKBACK, prepare, labeled_windows, latest_window
+from .features import (FEATURE_NAMES, LOOKBACK, prepare, labeled_windows,
+                       labeled_windows_v2, latest_window, latest_window_v2)
+from .trend import TREND_FEATURE_NAMES
 from .network import LAYERS, MLP
 
 
@@ -56,15 +58,34 @@ def transform(x, mu, sigma):
     return np.clip((x - mu) / sigma, -10, 10).reshape(len(x), -1)
 
 
+def fit_trend_scaler(extra_train: np.ndarray):
+    """Fit the five new summary features on the train split ONLY."""
+    mu = extra_train.mean(axis=0)
+    sigma = extra_train.std(axis=0)
+    sigma[sigma < 1e-8] = 1.0
+    return mu, sigma
+
+
+def transform_v2(x, extra, mu, sigma, trend_mu, trend_sigma):
+    """Preserve the v0.1 scaling of the 24 base features, append 5 new ones."""
+    base = transform(x, mu, sigma)
+    trend = np.clip((extra - trend_mu) / trend_sigma, -10, 10)
+    return np.concatenate([base, trend], axis=1)
+
+
 def train(excel: str, out: str, settings: Settings | None = None) -> dict:
     cfg = settings or Settings()
     if cfg.epochs < 1 or cfg.batch_size < 1 or cfg.patience < 1 or not cfg.seeds:
         raise ValueError("Invalid training settings")
     dataset = prepare(excel)
-    x, y, times = labeled_windows(dataset)
+    x, extra, y, times = labeled_windows_v2(dataset)
     a, b = split_positions(len(x))
     mu, sigma = fit_scaler(x[:a])
-    xt, xv, xs = (transform(z, mu, sigma) for z in (x[:a], x[a:b], x[b:]))
+    trend_mu, trend_sigma = fit_trend_scaler(extra[:a])
+    xt, xv, xs = (
+        transform_v2(x[start:end], extra[start:end], mu, sigma, trend_mu, trend_sigma)
+        for start, end in ((0, a), (a, b), (b, len(x)))
+    )
     yt, yv, ys = y[:a], y[a:b], y[b:]
     best_state, best_val, best_seed, best_epoch = None, float("inf"), None, None
     trials = []
@@ -91,6 +112,8 @@ def train(excel: str, out: str, settings: Settings | None = None) -> dict:
     chosen = MLP(seed=best_seed)
     chosen.load_state_dict(best_state)
     results = {
+        "model_version": "0.2.0",
+        "input_features": int(LAYERS[0]),
         "selected_seed": best_seed,
         "selected_epoch": best_epoch,
         "trials": trials,
@@ -108,25 +131,50 @@ def train(excel: str, out: str, settings: Settings | None = None) -> dict:
     np.savez_compressed(target / "model.npz", **best_state)
     (target / "config.json").write_text(json.dumps({"architecture": list(LAYERS), "lookback": LOOKBACK,
                                                        "timeframe": 15, "features": list(FEATURE_NAMES),
+                                                       "trend_features": list(TREND_FEATURE_NAMES),
+                                                       "model_version": "0.2.0",
                                                        "training": asdict(cfg)}, indent=2), encoding="utf-8")
     (target / "preprocessing.json").write_text(json.dumps({"mean": mu.tolist(), "std": sigma.tolist(),
-        "indicator_settings": {"macd": [12, 26, 9], "rsi": 14, "sma": [20, 50]},
+        "trend_mean": trend_mu.tolist(), "trend_std": trend_sigma.tolist(),
+        "indicator_settings": {"macd": [12, 26, 9], "rsi": 14, "sma": [20, 50], "atr": 14},
+        "trend_definitions": {
+            "trend_5": "close[t]/close[t-5] - 1",
+            "trend_10": "close[t]/close[t-10] - 1",
+            "trend_20": "close[t]/close[t-19] - 1 (20-bar window)",
+            "trend_strength": "abs(close[t]-close[t-19])/sum(abs(delta(close[t-19:t])))",
+            "atr14_ratio": "Wilder ATR14 / close[t]"},
         "sessions": "Asia/Tokyo 09-18, Europe/London 08-17, America/New_York 08-17; weekdays only",
-        "time_zone": "UTC; Unix seconds", "version": 1}, indent=2), encoding="utf-8")
+        "time_zone": "UTC; Unix seconds", "version": 2}, indent=2), encoding="utf-8")
     (target / "metrics.json").write_text(json.dumps(results, indent=2), encoding="utf-8")
     return results
 
 
 def predict(excel: str, model_dir: str) -> float:
+    """Use the stored schema; v0.1 checkpoints stay readable after v0.2."""
     root = Path(model_dir)
     cfg = json.loads((root / "config.json").read_text(encoding="utf-8"))
     prep = json.loads((root / "preprocessing.json").read_text(encoding="utf-8"))
-    if (cfg["features"] != list(FEATURE_NAMES) or cfg["architecture"] != list(LAYERS)
-        or cfg["lookback"] != LOOKBACK or cfg["timeframe"] != 15 or prep["version"] != 1):
+    common_ok = (cfg.get("features") == list(FEATURE_NAMES) and cfg.get("lookback") == LOOKBACK
+                 and cfg.get("timeframe") == 15)
+    v2 = (prep.get("version") == 2 and cfg.get("architecture") == list(LAYERS)
+          and cfg.get("trend_features") == list(TREND_FEATURE_NAMES))
+    v1_layers = (480, 128, 64, 32, 1)
+    v1 = (prep.get("version") == 1 and cfg.get("architecture") == list(v1_layers)
+          and "trend_features" not in cfg)
+    if not common_ok or not (v1 or v2):
         raise ValueError("Incompatible model configuration")
-    model = MLP()
+    sizes = LAYERS if v2 else v1_layers
+    model = MLP(sizes=sizes)
     with np.load(root / "model.npz", allow_pickle=False) as checkpoint:
         model.load_state_dict(checkpoint)
-    x = latest_window(prepare(excel))[None, ...]
-    x = transform(x, np.asarray(prep["mean"]), np.asarray(prep["std"]))
+    data = prepare(excel)
+    mean = np.asarray(prep["mean"], dtype=np.float64)
+    std = np.asarray(prep["std"], dtype=np.float64)
+    if v2:
+        x, extra = latest_window_v2(data)
+        x = transform_v2(x[None, ...], extra[None, ...], mean, std,
+                         np.asarray(prep["trend_mean"], dtype=np.float64),
+                         np.asarray(prep["trend_std"], dtype=np.float64))
+    else:
+        x = transform(latest_window(data)[None, ...], mean, std)
     return float(model.forward(x)[0])

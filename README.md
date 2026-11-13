@@ -1,22 +1,37 @@
 # AI Finance
 
-A lightweight **financial neural network built from scratch with NumPy**, trained on CPU using real 15-minute MetaTrader CSV/Excel candles. The first version is an educational experiment in learning and evaluating next-candle direction; **it does not place trades**.
+A small **CPU-only financial neural network built from scratch in NumPy**. It learns to predict the next available 15-minute candle's direction from real MetaTrader OHLCV exports. This is a research/learning project—not a trading system or financial advice.
 
-## v0.1: what works
+## v0.2: trend-aware experiment
 
-- Reads comma-, tab-, or semicolon-separated `.csv`, as well as `.xlsx`/`.xls`, with `time, open, high, low, close, volume, timeframe` (Unix seconds, timeframe **15**).
-- Computes MACD (12/26/9), RSI (14), SMA20, SMA50 using [`ta`](https://technical-analysis-library-in-python.readthedocs.io/en/latest/).
-- Adds UTC time, weekday, early/middle/late month, approximate Tokyo/London/New York session indicators (DST-aware), and actual candle gaps: **24 features/candle**.
-- Builds 20-candle rolling windows, predicts whether the **next available completed candle** closes above the last observed close.
-- Implements MLP **480 → 128 → 64 → 32 → 1**, ReLU, sigmoid, binary cross-entropy, backpropagation, and AdamW in NumPy. No pretrained weights, PyTorch, or TensorFlow.
-- Chronological **70% training / 15% validation / 15% holdout test**. Normalization is fitted only on the training portion. Multiple random seeds and early stopping are selected by validation loss; the test set is evaluated **only on the selected checkpoint**.
-- Saves the best weights and run metadata for CPU inference; reports accuracy, error rate, loss, and class-baseline accuracy.
+- Imports comma-, tab-, or semicolon-separated CSV, or Excel (`.xlsx`/`.xls`). Required columns: `time,open,high,low,close,volume,timeframe`; timestamps are Unix UTC seconds; timeframe must be `15`.
+- Calculates MACD (12/26/9), RSI14, SMA20, SMA50 and **ATR14** with [`ta`](https://technical-analysis-library-in-python.readthedocs.io/en/latest/).
+- Derives the existing **24 features per candle** (OHLCV relative values, indicators, weekday, time of day, early/middle/late month, approximate Asian/European/US market sessions, and trading gaps).
+- Adds **five trend summaries once per 20-candle sample**: returns over 5, 10, and 20 observed candles, trend strength (unsigned efficiency ratio), and relative ATR14. **Total inputs: 20 × 24 + 5 = 485.**
+- Trains a custom NumPy MLP **485 → 128 → 64 → 32 → 1**, using backpropagation, AdamW and BCE loss; random initialization, no pretrained weights or deep-learning framework.
+- Splits data **chronologically (70% training / 15% validation / 15% internal test)**; fits normalization **only on training data**. Selects the best seed and epoch by validation loss and saves the selected checkpoint.
+- Keeps existing **v0.1 (`480 → 128 → 64 → 32 → 1`) model checkpoints loadable for inference**; v0.2 is retrained from scratch and written to a different folder.
+
+### What the five features mean
+
+The sample ends at a **closed** candle `t`; no future values are used:
+
+| Feature | Definition |
+| --- | --- |
+| `trend_5` | `close[t] / close[t-5] - 1` |
+| `trend_10` | `close[t] / close[t-10] - 1` |
+| `trend_20` | `close[t] / close[t-19] - 1` (first-to-last close within the 20-candle window) |
+| `trend_strength` | `abs(close[t] - close[t-19]) / sum(abs(close changes over the window))`; zero when flat |
+| `atr14_ratio` | `ta`'s ATR14 (Wilder smoothing), divided by `close[t]` |
+
+Trend strength ranges from 0 to 1: 1 indicates a perfectly directional sequence; values near 0 indicate choppiness. It does not itself imply an upward or downward trend.
 
 ## Quick start (Ubuntu / Linux)
 
-Requires **Python 3.10+** (3.12 recommended), a CPU, and a CSV or Excel file exported from MetaTrader.
+Python 3.10+ (3.12 recommended), CPU, and a MetaTrader M15 CSV are sufficient.
 
 ```bash
+# If you already cloned the project, use: git pull origin main
 git clone https://github.com/omidnami/Ai-finance.git
 cd Ai-finance
 python3 -m venv .venv
@@ -24,60 +39,51 @@ source .venv/bin/activate
 python -m pip install -e '.[dev]'
 ```
 
-Copy your **15-minute** candle file somewhere on your computer (e.g. `data/history.csv`); raw Excel and trained model outputs are gitignored.
+Copy your **15-minute CSV** into `data/development.csv`. Keep the separately reserved `data/final_test.csv` **untouched** while developing and tuning this model.
 
 ```bash
-python -m finance_ai train --csv data/history.csv --out models/finance-v0.1
+python -m finance_ai train --csv data/development.csv --out models/finance-v0.2 \
+  --epochs 100 --seeds 13 42 97
 ```
 
-To run a quick smoke test on fewer epochs:
+For a quick smoke test (still trains on the development data):
 
 ```bash
-python -m finance_ai train --csv data/history.csv --out models/finance-v0.1 --epochs 5 --seeds 42
+python -m finance_ai train --csv data/development.csv --out models/finance-v0.2 \
+  --epochs 5 --seeds 42
 ```
 
-Model artifacts:
+Saved artifacts:
 
 ```text
-models/finance-v0.1/
-├── model.npz           # Best validation checkpoint (weights and biases)
-├── config.json         # Model architecture and features
-├── preprocessing.json  # Train-only normalization and indicator settings
-└── metrics.json        # Chronological split, runs, train/val/test statistics
+models/finance-v0.2/
+├── model.npz           # selected best weights and biases
+├── config.json         # architecture and feature names
+├── preprocessing.json  # train-only normalization, ATR/indicator definitions
+└── metrics.json        # selection history and split results
 ```
 
-Inference uses **the same indicator and time-feature service**:
+Inference uses the **same feature and normalization pipeline**:
 
 ```bash
-python -m finance_ai predict --csv data/recent_candles.csv --model models/finance-v0.1
+python -m finance_ai predict --csv data/recent_candles.csv --model models/finance-v0.2
 ```
 
-Use enough historical **closed** candles in the prediction CSV file for MA50/MACD warmup + 20-candle lookback (100+ recommended). Output is an **uncalibrated** upward probability; it is not a guaranteed real-world probability.
+For an existing v0.1 checkpoint, explicitly pass `--model models/finance-v0.1`. Do not overwrite v0.1 when experimenting with v0.2.
 
-To run tests:
+Run tests:
 
 ```bash
 python -m pytest -q
 ```
 
-**Note:** Version 0.1 requires timeframe `15` in every row. A CSV exported as M5 (`timeframe=5`) will be rejected. A 100-candle file can test the importer and indicators, but is too short for the current train/validation/test split; use at least 200 closed M15 candles for the minimal training smoke test, and preferably much more.\n\n## Input definition
+## Data and evaluation notes
 
-| Field | Definition |
-| --- | --- |
-| `time` | Unix timestamp in seconds, in UTC, aligned to 15-minute bars |
-| `open`, `high`, `low`, `close` | Valid positive OHLC prices |
-| `volume` | Nonnegative reported volume (could be tick volume depending on source) |
-| `timeframe` | `15` for every row |
-
-Data must be in ascending time order, without duplicated timestamps. Valid market closures, weekends, and holidays can cause **gaps**; no synthetic candles are inserted. Session flags are simple time-window approximations (Tokyo 09–18, London 08–17, New York 08–17 in local time, weekdays), **not official exchange opening calendars**. Verify MetaTrader timestamps and broker time-zone conventions before training; if the input `time` values are broker-local rather than UTC epoch seconds, convert them first.
-
-The 24-feature specification is in `finance_ai/features.py` and can be versioned for future models. If features or network dimensions change, old checkpoints are **not** automatically compatible.
-
-## How evaluation works
-
-Each sample contains 20 completed candles and a binary label defined by `close(t+1) > close(t)`. Ties count as down (label 0). The model never receives the next close as an input. Splits are **time-ordered**, and only training samples determine normalization statistics. The validation portion chooses the best seed/epoch; the holdout test is reserved for a single final assessment. Overlapping past context at a split boundary is permitted because it is historically available; labels remain strictly inside their own split.
-
-The metrics are **classification metrics**, not a backtest or expected trading profit. Market predictions are uncertain and an accuracy above 50% is not proof of a profitable strategy. Future versions can add walk-forward evaluation and verified exchange-session calendars.
+- Files must contain strictly increasing unique timestamps with valid OHLC prices and at least 100 closed M15 candles; **a few hundred or more** are needed for the current train/validation/test split, and thousands are preferable.
+- Trading hours and holiday/weekend **gaps are genuine**; no synthetic candles are created. Session windows are approximate local Tokyo/London/New York hours using DST-aware IANA zones, not official exchange calendars.
+- Technical indicators warm up from previous candles; incomplete initial rows are excluded. All 5 trend features use only historical closes and the ATR value available at the end of the window.
+- Training labels represent `close[t+1] > close[t]` and ties count as down. Output probabilities are **uncalibrated**; classification accuracy is not a profitability measure.
+- Development comparisons should be selected **only by validation**, not by repeated peeking at the internal test or the reserved `final_test.csv`. The final reserved holdout is for one evaluation after selecting the approach. The CLI still reports the internal test diagnostically after training.
 
 ## Support websites
 

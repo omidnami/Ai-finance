@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import numpy as np
 
-LAYERS = (480, 128, 64, 32, 1)
+LAYERS = (485, 128, 64, 32, 1)
 
 
 class MLP:
