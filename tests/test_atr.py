@@ -95,7 +95,7 @@ def test_train_predict_roundtrip_no_reserved_holdout_scoring(monkeypatch, tmp_pa
     monkeypatch.setattr('finance_ai.atr.prepare', lambda _: fake)
     out = tmp_path / 'v05'
     args = dict(settings=__import__('finance_ai.experiment', fromlist=['Settings']).Settings(
-        epochs=2, seeds=(13, 42), batch_size=32, patience=2), hidden=(12, 6))
+        epochs=2, seeds=(13, 42), batch_size=32, patience=2), hidden=(12, 6), include_macd=True)
     report = train_atr('ignored.csv', str(out), **args)
     assert report['model_version'] == '0.5.0'
     assert report['architecture'] == [485, 12, 6, 3]
@@ -124,9 +124,9 @@ def test_holdout_changes_cannot_change_v05_training(monkeypatch, tmp_path):
     settings = __import__('finance_ai.experiment', fromlist=['Settings']).Settings(
         epochs=1, seeds=(42,), batch_size=64)
     monkeypatch.setattr('finance_ai.atr.prepare', lambda _: a)
-    first = train_atr('ignore.csv', str(tmp_path/'a'), settings, hidden=(8,))
+    first = train_atr('ignore.csv', str(tmp_path/'a'), settings, hidden=(8,), include_macd=True)
     monkeypatch.setattr('finance_ai.atr.prepare', lambda _: b)
-    second = train_atr('ignore.csv', str(tmp_path/'b'), settings, hidden=(8,))
+    second = train_atr('ignore.csv', str(tmp_path/'b'), settings, hidden=(8,), include_macd=True)
     assert first['train'] == second['train']
     assert first['validation'] == second['validation']
     assert first['selected_seed'] == second['selected_seed']

@@ -10,7 +10,7 @@ from .atr import train_atr, predict_atr, DEFAULT_HIDDEN, DEFAULT_ATR_MULTIPLIER
 
 
 def main():
-    parser = argparse.ArgumentParser(description="AI Finance: CPU-only neural network v0.5")
+    parser = argparse.ArgumentParser(description="AI Finance: CPU-only neural network v0.6")
     actions = parser.add_subparsers(dest="action", required=True)
     training = actions.add_parser("train", help="Train and evaluate on chronological splits")
     training.add_argument("--data", "--csv", "--excel", dest="data", required=True, help="MetaTrader M15 .csv/.xlsx/.xls export")
@@ -38,7 +38,7 @@ def main():
     architectures.add_argument("--seeds", type=int, nargs="+", default=[13, 42, 97])
     atr_train = actions.add_parser("train-atr", help="Train a larger 3-class MLP using ATR-neutral labels")
     atr_train.add_argument("--data", "--csv", "--excel", dest="data", required=True)
-    atr_train.add_argument("--out", default="models/finance-v0.5")
+    atr_train.add_argument("--out", default="models/finance-v0.6")
     atr_train.add_argument("--epochs", type=int, default=100)
     atr_train.add_argument("--batch-size", type=int, default=64)
     atr_train.add_argument("--lr", type=float, default=0.001)
@@ -68,10 +68,11 @@ def main():
                            Settings(epochs=args.epochs, batch_size=args.batch_size,
                                     lr=args.lr, patience=args.patience,
                                     seeds=tuple(args.seeds)),
-                           hidden=tuple(args.hidden), atr_multiplier=args.atr_multiplier)
+                           hidden=tuple(args.hidden), atr_multiplier=args.atr_multiplier,
+                           include_macd=False)
     else:
         config = json.loads((Path(args.model) / "config.json").read_text(encoding="utf-8"))
-        if config.get("model_version") == "0.5.0":
+        if config.get("model_version") in {"0.5.0", "0.6.0"}:
             print(json.dumps(predict_atr(args.data, args.model), ensure_ascii=False, indent=2))
             return
         probability = predict(args.data, args.model)

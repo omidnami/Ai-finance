@@ -19,6 +19,11 @@ FEATURE_NAMES = (
     "log_gap", "month_day",
 )
 assert len(FEATURE_NAMES) == 24
+# Keep the exact v0.1-v0.5 schema for existing checkpoints. New v0.6
+# experiments skip all three MACD channels; input dimensionality becomes 425.
+MACD_FEATURE_NAMES = ("macd_ratio", "macd_signal_ratio", "macd_hist_ratio")
+FEATURE_NAMES_NO_MACD = tuple(name for name in FEATURE_NAMES if name not in MACD_FEATURE_NAMES)
+assert len(FEATURE_NAMES_NO_MACD) == 21
 
 
 @dataclass(frozen=True)
@@ -77,9 +82,10 @@ def read_candles(path: str | Path) -> pd.DataFrame:
     return frame.reset_index(drop=True)
 
 
-def prepare(path: str | Path) -> PreparedData:
+def prepare(path: str | Path, *, include_macd: bool = True) -> PreparedData:
+    """Make a candle feature matrix; old models retain the legacy MACD schema."""
     from ta.momentum import RSIIndicator
-    from ta.trend import MACD, SMAIndicator
+    from ta.trend import SMAIndicator
     from ta.volatility import AverageTrueRange
 
     df = read_candles(path)
@@ -87,7 +93,9 @@ def prepare(path: str | Path) -> PreparedData:
         raise ValueError("At least 100 candles needed for warmup and evaluation")
     close = df["close"].astype(float)
     prev = close.shift(1)
-    macd = MACD(close, window_fast=12, window_slow=26, window_sign=9, fillna=False)
+    if include_macd:
+        from ta.trend import MACD
+        macd = MACD(close, window_fast=12, window_slow=26, window_sign=9, fillna=False)
     rsi = RSIIndicator(close, window=14, fillna=False).rsi()
     sma20 = SMAIndicator(close, window=20, fillna=False).sma_indicator()
     sma50 = SMAIndicator(close, window=50, fillna=False).sma_indicator()
@@ -103,9 +111,10 @@ def prepare(path: str | Path) -> PreparedData:
     for c in ("open", "high", "low", "close"):
         f[c + "_return"] = df[c] / prev - 1.0
     f["log_volume"] = np.log1p(df["volume"])
-    f["macd_ratio"] = macd.macd() / prev
-    f["macd_signal_ratio"] = macd.macd_signal() / prev
-    f["macd_hist_ratio"] = macd.macd_diff() / prev
+    if include_macd:
+        f["macd_ratio"] = macd.macd() / prev
+        f["macd_signal_ratio"] = macd.macd_signal() / prev
+        f["macd_hist_ratio"] = macd.macd_diff() / prev
     f["rsi14"] = rsi / 100.0
     f["sma20_ratio"] = sma20 / prev - 1.0
     f["sma50_ratio"] = sma50 / prev - 1.0
@@ -122,7 +131,7 @@ def prepare(path: str | Path) -> PreparedData:
     f["europe_us_overlap"] = sessions[:, 1] * sessions[:, 2]
     f["log_gap"] = np.log1p(gap)
     f["month_day"] = (days - 1) / 30.0
-    f = f[list(FEATURE_NAMES)]
+    f = f[list(FEATURE_NAMES if include_macd else FEATURE_NAMES_NO_MACD)]
     # Drop only the warmup at the start; never remove a gap or fabricate candles.
     valid = np.isfinite(f.to_numpy(dtype=float)).all(axis=1)
     first = int(np.argmax(valid))
@@ -155,7 +164,7 @@ def latest_window(data: PreparedData, lookback: int = LOOKBACK) -> np.ndarray:
 
 
 def labeled_windows_v2(data: PreparedData, lookback: int = LOOKBACK):
-    """v0.2: same 24-feature windows + five trend summaries per window."""
+    """Causal feature windows (24 legacy or 21 without MACD) and five trend summaries."""
     from .trend import summary_at
 
     if lookback != 20:

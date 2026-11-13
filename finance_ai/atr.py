@@ -12,7 +12,7 @@ from pathlib import Path
 import numpy as np
 
 from .experiment import Settings, fit_scaler, fit_trend_scaler, transform_v2
-from .features import (FEATURE_NAMES, LOOKBACK, PreparedData, labeled_windows_v2,
+from .features import (FEATURE_NAMES, FEATURE_NAMES_NO_MACD, LOOKBACK, PreparedData, labeled_windows_v2,
                        latest_window_v2, prepare)
 from .horizons import comparison_slices
 from .network import MLP
@@ -117,7 +117,8 @@ def classification_metrics(model: SoftmaxMLP, x: np.ndarray, y: np.ndarray) -> d
 
 def train_atr(csv: str, out: str, settings: Settings | None = None,
               hidden: tuple[int, ...] = DEFAULT_HIDDEN,
-              atr_multiplier: float = DEFAULT_ATR_MULTIPLIER) -> dict:
+              atr_multiplier: float = DEFAULT_ATR_MULTIPLIER,
+              *, include_macd: bool = False) -> dict:
     cfg = settings or Settings()
     if (cfg.epochs < 1 or cfg.batch_size < 1 or cfg.patience < 1 or not cfg.seeds or
             any(not isinstance(seed, int) for seed in cfg.seeds)):
@@ -127,8 +128,11 @@ def train_atr(csv: str, out: str, settings: Settings | None = None,
     if not np.isfinite(atr_multiplier) or atr_multiplier <= 0:
         raise ValueError("ATR multiplier must be positive and finite")
 
-    sizes = (485, *hidden, 3)
-    data = prepare(csv)
+    selected_features = FEATURE_NAMES if include_macd else FEATURE_NAMES_NO_MACD
+    model_version = "0.5.0" if include_macd else "0.6.0"
+    preprocessing_version = 5 if include_macd else 6
+    sizes = (LOOKBACK * len(selected_features) + len(TREND_FEATURE_NAMES), *hidden, 3)
+    data = prepare(csv) if include_macd else prepare(csv, include_macd=False)
     # Match the v0.4 sample endpoints exactly. Do not use the reserved holdout
     # labels or prices for either training or validation scoring.
     all_x, all_extra, _, _ = labeled_windows_v2(data)
@@ -171,7 +175,7 @@ def train_atr(csv: str, out: str, settings: Settings | None = None,
     chosen = SoftmaxMLP(sizes, seed=best_seed)
     chosen.load_state_dict(best_state)
     report = {
-        "model_version": "0.5.0", "prediction_type": "three_class_atr",
+        "model_version": model_version, "prediction_type": "three_class_atr",
         "architecture": list(sizes),
         "parameters": int(sum(a * b + b for a, b in zip(sizes[:-1], sizes[1:]))),
         "horizon_candles": 1,
@@ -194,19 +198,20 @@ def train_atr(csv: str, out: str, settings: Settings | None = None,
     directory.mkdir(parents=True, exist_ok=True)
     np.savez_compressed(directory / "model.npz", **best_state)
     config = {
-        "model_version": "0.5.0", "architecture": list(sizes),
+        "model_version": model_version, "architecture": list(sizes),
         "lookback": LOOKBACK, "timeframe": 15,
-        "features": list(FEATURE_NAMES), "trend_features": list(TREND_FEATURE_NAMES),
+        "features": list(selected_features), "trend_features": list(TREND_FEATURE_NAMES),
         "horizon_candles": 1, "classes": list(CLASS_NAMES),
         "atr_multiplier": float(atr_multiplier),
         "target_definition": "down if close[t+1]-close[t] < -k*ATR14[t]; up if > k*ATR14[t]; else neutral",
         "training": asdict(cfg),
     }
     preprocessing = {
-        "version": 5, "mean": mu.tolist(), "std": sigma.tolist(),
+        "version": preprocessing_version, "mean": mu.tolist(), "std": sigma.tolist(),
         "trend_mean": trend_mu.tolist(), "trend_std": trend_sigma.tolist(),
-        "indicator_settings": {"macd": [12, 26, 9], "rsi": 14,
-                               "sma": [20, 50], "atr": 14},
+        "indicator_settings": ({"macd": [12, 26, 9], "rsi": 14,
+                                "sma": [20, 50], "atr": 14} if include_macd
+                               else {"rsi": 14, "sma": [20, 50], "atr": 14}),
         "time_zone": "UTC; Unix seconds",
         "sessions": "Asia/Tokyo 09-18, Europe/London 08-17, America/New_York 08-17; weekdays only",
     }
@@ -221,19 +226,25 @@ def predict_atr(csv: str, model_dir: str) -> dict:
     config = json.loads((root / "config.json").read_text(encoding="utf-8"))
     prep = json.loads((root / "preprocessing.json").read_text(encoding="utf-8"))
     sizes = config.get("architecture")
-    if (config.get("model_version") != "0.5.0" or prep.get("version") != 5 or
-            not isinstance(sizes, list) or sizes[0] != 485 or sizes[-1] != 3 or
-            len(sizes) < 3 or any(not isinstance(n, int) or n < 1 for n in sizes) or
-            config.get("features") != list(FEATURE_NAMES) or
+    version = config.get("model_version")
+    legacy = version == "0.5.0" and prep.get("version") == 5
+    no_macd = version == "0.6.0" and prep.get("version") == 6
+    expected_features = FEATURE_NAMES if legacy else FEATURE_NAMES_NO_MACD
+    expected_inputs = LOOKBACK * len(expected_features) + len(TREND_FEATURE_NAMES)
+    if (not (legacy or no_macd) or
+            not isinstance(sizes, list) or len(sizes) < 3 or
+            sizes[0] != expected_inputs or sizes[-1] != 3 or
+            any(not isinstance(n, int) or n < 1 for n in sizes) or
+            config.get("features") != list(expected_features) or
             config.get("trend_features") != list(TREND_FEATURE_NAMES) or
             config.get("classes") != list(CLASS_NAMES) or
             config.get("lookback") != LOOKBACK or config.get("timeframe") != 15 or
             config.get("horizon_candles") != 1):
-        raise ValueError("Incompatible v0.5 model configuration")
+        raise ValueError("Incompatible ATR model configuration")
     model = SoftmaxMLP(tuple(sizes))
     with np.load(root / "model.npz", allow_pickle=False) as checkpoint:
         model.load_state_dict(checkpoint)
-    data = prepare(csv)
+    data = prepare(csv) if legacy else prepare(csv, include_macd=False)
     x, extra = latest_window_v2(data)
     scaled = transform_v2(x[None], extra[None],
                           np.asarray(prep["mean"], dtype=float),
@@ -241,7 +252,7 @@ def predict_atr(csv: str, model_dir: str) -> dict:
                           np.asarray(prep["trend_mean"], dtype=float),
                           np.asarray(prep["trend_std"], dtype=float))
     p = model.forward(scaled)[0]
-    return {"model_version": "0.5.0", "horizon_candles": 1,
+    return {"model_version": version, "horizon_candles": 1,
             "predicted_direction": CLASS_NAMES[int(np.argmax(p))],
             "probabilities_uncalibrated": dict(zip(CLASS_NAMES, map(float, p))),
             "atr_multiplier": float(config["atr_multiplier"])}

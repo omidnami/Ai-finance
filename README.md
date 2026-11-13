@@ -230,3 +230,24 @@ python -m finance_ai predict --csv data/recent_candles.csv \
 Model files: `model.npz`, `config.json`, `preprocessing.json`, `metrics.json`.
 These are experimental signals, not trading recommendations or validated
 probabilities of price movement.
+
+## v0.6: remove MACD from the ATR three-class model
+
+`train-atr` now trains a fresh **MACD-free** 3-class classifier. No MACD
+indicators are calculated or provided to this model. RSI14, SMA20/SMA50,
+ATR14, time/session features, 20-candle history and five trend summaries
+are unchanged. Features drop from **24 to 21 per candle**; network input
+changes from **485 to 425**, while hidden layers remain
+`512 → 256 → 128 → 64` with 3-class softmax output. The train/validation
+splits, 25% ATR label threshold, and validation-only selection are unchanged.
+
+```bash
+git pull origin main
+python -m finance_ai train-atr --csv data/development.csv \
+  --out models/finance-v0.6 --epochs 100 --seeds 13 42 97
+```
+
+The `config.json` and `preprocessing.json` record the 21-feature schema and
+version `0.6.0`. Existing v0.1–v0.5 checkpoints remain readable for inference
+with their exact old schemas; do **not** overwrite a previous model directory.
+The final test set is still reserved and is never used for tuning.
