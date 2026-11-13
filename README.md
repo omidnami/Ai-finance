@@ -1,8 +1,7 @@
 # AI Finance
 
-**Current development version: v0.8.0 — confirmed past-only swing reversal candidates.**
-v0.7 remains the standalone current uptrend/downtrend classifier. v0.8 separately recognizes potential bullish/bearish reversals **after a closed confirmation candle**. Neither model forecasts turning points in advance or generates trade entries.
-All earlier releases and model checkpoints remain supported.
+**Current development version: v0.9.0 — market context, setup quality and stop-entry paper simulation.**
+This version **combines the unchanged v0.7 current-trend and v0.8 confirmed-reversal checkpoints** with a new, transparent, Brooks-inspired decision/replay engine. No new neural weights are trained, and no live orders are sent. All earlier commands remain available.
 
 A small **CPU-only financial neural network built from scratch in NumPy** using MetaTrader OHLCV candles. Earlier versions experimented with next-candle forecasts; v0.7 focuses only on recognizing the **current** market trend. This is a research/learning project—not a trading system or financial advice.
 
@@ -556,3 +555,100 @@ directional test need not be a profitable or executable trade.
 **Repeated strategy tuning against `final_test.csv` uses up its status
 as an untouched final test**; reserve a newer, unseen period for a final
 unbiased evaluation.
+
+## v0.9.0 — Market Context → Setup Quality → Entry & Risk
+
+**The new v0.9 is a separate, deterministic and auditable research layer**,
+not a new neural network or claim of an Al Brooks proprietary strategy.
+It loads the existing v0.7 trend checkpoint and v0.8 confirmed-reversal
+checkpoint. Their architecture, preprocessing and trained weights are
+unchanged, and **no retraining is required**.
+
+### Research basis: price action concepts vs our implementation
+
+| Concept | Brooks' published approach | v0.9 experiment |
+| --- | --- | --- |
+| **Market context** | Distinguish breakout/spike, trend channel, and trading range; entries need to suit the market cycle, and the middle of a range is typically a poor location. | Inspect trailing **32 completed candles**, regression slope (in ATR units), directional efficiency, relative position within the 32-bar range, plus the **v0.7 direction**. Tag `breakout`, `trend_channel` or `trading_range`. |
+| **Setup and signal bar** | A multi-bar *setup* differs from the final *signal bar*. Strong closing location, surrounding bars and context matter more than an isolated candlestick. | Require v0.8 **AI triangle and constructed price-reference circle** to agree (same bullish/bearish direction), then grade the signal candle's body/close position/wick, range edge, prior slope and v0.8 score. A **0–100 heuristic** controls whether an order can be queued. |
+| **Entry and risk** | A stop entry can trigger beyond the signal-bar high/low on a *subsequent* candle, with an appropriately placed protective stop. Risk, reward and probability interact; reward/risk alone is not a profitability guarantee. | Plan a **BUY STOP** above signal high or **SELL STOP** below signal low by a configurable tick; protective stop beyond the signal/pivot extreme + ATR buffer, a configurable target (default **2R**). Paper orders expire after 3 future bars; after filling, process stop/target or close after 20 observed bars. |
+
+The three-source research references are [Market Cycle and trend channels](https://www.brookstradingcourse.com/futures-market/trade-trend-channels/),
+[Setup vs Signal Bar](https://www.brookstradingcourse.com/price-action/professional-price-action-trader/),
+[Trading ranges](https://www.brookstradingcourse.com/how-to-trade-manual/trading-ranges/),
+[Stop-entry signal/entry bars](https://www.brookstradingcourse.com/analysis/emini-high-1-buy-signal-context-follow-through/),
+and [Risk/reward tradeoffs](https://www.brookstradingcourse.com/how-to-trade-price-action-manual/).
+**The numeric thresholds, 0–100 score and simulator are our engineering
+hypotheses, NOT rules or statistical probabilities supplied by Brooks.**
+
+### Important causal / execution rules
+
+- Read **only completed M15 candles**; each classification is at candle
+  close `t`. Model features and context use `<= t`. The earliest
+  stop-entry fill is **candle `t+1`**, only if its high/low hits the trigger.
+  No automatic fill at the next open unless the price actually gaps through
+  the stop-entry trigger.
+- A filled paper position has a **fixed stop** and **fixed target**. If
+  stop and target are both touched inside the same OHLC candle, assume
+  the **stop was first** (conservative without tick-level data).
+  Adverse open gaps through the stop exit at the worse opening price.
+  Favorable target gaps are capped at the target level.
+- Keep at most **one pending order or open position** at a time; log
+  overlapping opportunities as skipped. Expired stop-entry orders were never
+  positions. Closed trades have a fixed maximum holding period.
+- An optional fixed **round-trip cost in XAUUSD quote-price units** is
+  deducted from outcomes (default **zero**). Hypothetical position size uses
+  a constant user-supplied initial equity with default **0.5% risk budget**
+  per paper trade; **not** a real broker position sizing convention,
+  compounding engine or evidence of executable returns.
+- Context and quality are **filters**. Model softmax and sigmoid outputs
+  are uncalibrated. A favorable quality score is **not** a win probability.
+  The v0.8 price reference **is its training target**, not an independent
+  confirmation source. The simulator does not forecast reversals in advance.
+
+### CLI commands
+
+**Inspect one current setup on the latest completed candle:**
+
+```bash
+git pull origin main
+python -m finance_ai analyze-entry \
+  --csv data/recent_candles.csv \
+  --trend-model models/finance-v0.7 \
+  --reversal-model models/finance-v0.8
+```
+
+Returns: current cycle and v0.7 trend, AI reversal, matching historical
+reference, candidate side, reason if rejected, quality score and planned
+**entry trigger, protective stop and 2R target**.
+
+**Replay every candle chronologically with paper entry execution:**
+
+```bash
+python -m finance_ai backtest-entries \
+  --csv data/new_unseen_m15.csv \
+  --trend-model models/finance-v0.7 \
+  --reversal-model models/finance-v0.8 \
+  --out reports/v0.9-entries.csv
+```
+
+Test the first 200 sequential steps with `--max-steps 200`.
+Parameters (research settings, **not optimized defaults**):
+`--min-quality 65`, `--order-valid-bars 3`,
+`--max-holding-bars 20`, `--target-rr 2.0`,
+`--tick-size 0.01`, `--roundtrip-cost-units 0.0`,
+`--risk-budget-fraction 0.005`, `--initial-equity 10000`.
+
+Files written:
+- `reports/v0.9-entries.csv`: **one row per closed candle** with regime,
+  both models' labels, setup score/filters, order status and trade event.
+- `reports/v0.9-entries.trades.csv`: **one row per completed paper trade**
+  including entry/stop/target/exit, reason, return in `R` and hypothetical
+  P&L with the configured simplified fixed cost.
+- `reports/v0.9-entries.summary.json`: event counts, accepted/rejected
+  setups, filled/expired orders and BUY/SELL/overall completed trade stats.
+
+**Data discipline:** `data/final_test.csv` was already inspected and
+used for v0.8 development discussion. It must **not** be represented as
+an untouched out-of-sample evaluation of v0.9. Use a new subsequent
+time period for an unbiased evaluation after freezing these rules.
+This project provides research tools, **not investment advice or real orders**.

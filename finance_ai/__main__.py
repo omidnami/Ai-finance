@@ -12,10 +12,11 @@ from .trend_chart import plot_validation_trend
 from .reversal_detection import train_reversal, detect_reversal, DEFAULT_HIDDEN as REVERSAL_HIDDEN
 from .reversal_chart import plot_validation_reversals
 from .reversal_walkforward import run_reversal_walkforward
+from .entry_engine import EntryRules, run_entries, inspect_last
 
 
 def main():
-    parser = argparse.ArgumentParser(description="AI Finance: CPU-only neural network v0.8")
+    parser = argparse.ArgumentParser(description="AI Finance: CPU-only neural network experiments + v0.9 setup/entry research")
     actions = parser.add_subparsers(dest="action", required=True)
     training = actions.add_parser("train", help="Train and evaluate on chronological splits")
     training.add_argument("--data", "--csv", "--excel", dest="data", required=True, help="MetaTrader M15 .csv/.xlsx/.xls export")
@@ -97,6 +98,24 @@ def main():
                           help="Process only N one-candle steps for a quick check")
     rev_walk.add_argument("--cost-per-unit", type=float, default=0.0,
                           help="Optional round-trip cost in XAUUSD quote-price units per ounce")
+    setup = actions.add_parser("analyze-entry", help="v0.9: last closed candle, market context + setup quality + planned stop-entry")
+    setup.add_argument("--data", "--csv", "--excel", dest="data", required=True)
+    setup.add_argument("--trend-model", default="models/finance-v0.7")
+    setup.add_argument("--reversal-model", default="models/finance-v0.8")
+    replay = actions.add_parser("backtest-entries", help="v0.9: candle-by-candle paper stop-entry/stop/target replay")
+    replay.add_argument("--data", "--csv", "--excel", dest="data", required=True)
+    replay.add_argument("--trend-model", default="models/finance-v0.7")
+    replay.add_argument("--reversal-model", default="models/finance-v0.8")
+    replay.add_argument("--out", default="reports/v0.9-entries.csv")
+    replay.add_argument("--max-steps", type=int)
+    replay.add_argument("--min-quality", type=int, default=65)
+    replay.add_argument("--order-valid-bars", type=int, default=3)
+    replay.add_argument("--max-holding-bars", type=int, default=20)
+    replay.add_argument("--target-rr", type=float, default=2.0)
+    replay.add_argument("--tick-size", type=float, default=.01)
+    replay.add_argument("--roundtrip-cost-units", type=float, default=0.0)
+    replay.add_argument("--risk-budget-fraction", type=float, default=.005)
+    replay.add_argument("--initial-equity", type=float, default=10000.0)
     prediction = actions.add_parser("predict", help="Predict after the latest completed candle")
     prediction.add_argument("--data", "--csv", "--excel", dest="data", required=True)
     prediction.add_argument("--model", default="models/finance-v0.2")
@@ -138,6 +157,20 @@ def main():
         output = detect_reversal(args.data, args.model)
     elif args.action == "plot-reversals":
         output = plot_validation_reversals(args.data, args.model, args.out, args.candles)
+    elif args.action == "analyze-entry":
+        output = inspect_last(args.data, args.trend_model, args.reversal_model)
+    elif args.action == "backtest-entries":
+        run_entries(args.data, args.trend_model, args.reversal_model, args.out,
+                    EntryRules(min_quality=args.min_quality,
+                               order_valid_bars=args.order_valid_bars,
+                               max_holding_bars=args.max_holding_bars,
+                               target_rr=args.target_rr,
+                               tick_size=args.tick_size,
+                               roundtrip_cost_units=args.roundtrip_cost_units,
+                               risk_budget_fraction=args.risk_budget_fraction,
+                               initial_equity=args.initial_equity),
+                    max_steps=args.max_steps)
+        return
     elif args.action == "walkforward-reversals":
         result = run_reversal_walkforward(args.data, args.model, args.out,
                                           batch_candles=args.batch_candles,
