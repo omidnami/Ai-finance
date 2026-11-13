@@ -9,10 +9,12 @@ from .architectures import compare_architectures
 from .atr import train_atr, predict_atr, DEFAULT_HIDDEN, DEFAULT_ATR_MULTIPLIER
 from .trend_detection import train_trend, detect_trend, DEFAULT_HIDDEN as TREND_HIDDEN
 from .trend_chart import plot_validation_trend
+from .reversal_detection import train_reversal, detect_reversal, DEFAULT_HIDDEN as REVERSAL_HIDDEN
+from .reversal_chart import plot_validation_reversals
 
 
 def main():
-    parser = argparse.ArgumentParser(description="AI Finance: CPU-only neural network v0.7")
+    parser = argparse.ArgumentParser(description="AI Finance: CPU-only neural network v0.8")
     actions = parser.add_subparsers(dest="action", required=True)
     training = actions.add_parser("train", help="Train and evaluate on chronological splits")
     training.add_argument("--data", "--csv", "--excel", dest="data", required=True, help="MetaTrader M15 .csv/.xlsx/.xls export")
@@ -67,6 +69,23 @@ def main():
     trend_chart.add_argument("--model", default="models/finance-v0.7")
     trend_chart.add_argument("--out", default="charts/finance-v0.7-validation-500.png")
     trend_chart.add_argument("--candles", type=int, default=500)
+    rev_training = actions.add_parser("train-reversal", help="Learn past-only confirmed swing reversal candidates")
+    rev_training.add_argument("--data", "--csv", "--excel", dest="data", required=True)
+    rev_training.add_argument("--out", default="models/finance-v0.8")
+    rev_training.add_argument("--epochs", type=int, default=100)
+    rev_training.add_argument("--batch-size", type=int, default=64)
+    rev_training.add_argument("--lr", type=float, default=0.001)
+    rev_training.add_argument("--patience", type=int, default=12)
+    rev_training.add_argument("--seeds", type=int, nargs="+", default=[13, 42, 97])
+    rev_training.add_argument("--hidden", type=int, nargs="+", default=list(REVERSAL_HIDDEN))
+    rev_detect = actions.add_parser("detect-reversal", help="Detect confirmed reversal candidate on last closed M15 candle")
+    rev_detect.add_argument("--data", "--csv", "--excel", dest="data", required=True)
+    rev_detect.add_argument("--model", default="models/finance-v0.8")
+    rev_plot = actions.add_parser("plot-reversals", help="Plot v0.8 model reversal markers on validation candles")
+    rev_plot.add_argument("--data", "--csv", "--excel", dest="data", required=True)
+    rev_plot.add_argument("--model", default="models/finance-v0.8")
+    rev_plot.add_argument("--out", default="charts/finance-v0.8-validation-500.png")
+    rev_plot.add_argument("--candles", type=int, default=500)
     prediction = actions.add_parser("predict", help="Predict after the latest completed candle")
     prediction.add_argument("--data", "--csv", "--excel", dest="data", required=True)
     prediction.add_argument("--model", default="models/finance-v0.2")
@@ -99,6 +118,15 @@ def main():
         output = detect_trend(args.data, args.model)
     elif args.action == "plot-trend":
         output = plot_validation_trend(args.data, args.model, args.out, args.candles)
+    elif args.action == "train-reversal":
+        output = train_reversal(args.data, args.out,
+                                Settings(epochs=args.epochs, batch_size=args.batch_size,
+                                         lr=args.lr, patience=args.patience,
+                                         seeds=tuple(args.seeds)), hidden=tuple(args.hidden))
+    elif args.action == "detect-reversal":
+        output = detect_reversal(args.data, args.model)
+    elif args.action == "plot-reversals":
+        output = plot_validation_reversals(args.data, args.model, args.out, args.candles)
     else:
         config = json.loads((Path(args.model) / "config.json").read_text(encoding="utf-8"))
         if config.get("model_version") in {"0.5.0", "0.6.0"}:

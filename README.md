@@ -1,9 +1,8 @@
 # AI Finance
 
-**Current development version: v0.7.0 — detection of the current XAUUSD M15 trend.**
-It labels the present state as **uptrend / downtrend**, using only closed historical candles.
-There is **no future forecast or reversal/entry signal** in v0.7; older v0.1–v0.6 experiments remain available.
-The v0.6.0 release remains documented below.
+**Current development version: v0.8.0 — confirmed past-only swing reversal candidates.**
+v0.7 remains the standalone current uptrend/downtrend classifier. v0.8 separately recognizes potential bullish/bearish reversals **after a closed confirmation candle**. Neither model forecasts turning points in advance or generates trade entries.
+All earlier releases and model checkpoints remain supported.
 
 A small **CPU-only financial neural network built from scratch in NumPy** using MetaTrader OHLCV candles. Earlier versions experimented with next-candle forecasts; v0.7 focuses only on recognizing the **current** market trend. This is a research/learning project—not a trading system or financial advice.
 
@@ -381,3 +380,117 @@ separately reserved `final_test.csv` is never inspected. No forecasts,
 reversal/entry signals, training, checkpoint modifications, or automatic
 parameter selection are performed. The printed agreement rate measures
 matching a constructed historical reference; **not** real-market accuracy.
+
+## v0.8.0 — confirmed price-reversal candidates (no future forecast)
+
+**Goal:** identify **bullish reversal / bearish reversal / none** on XAUUSD M15.
+This model is **independent of the v0.7 trend checkpoint**. The earlier
+trend-recognition network and all v0.1–v0.7 commands/checkpoints remain
+unchanged. The third category (`none`) is essential because genuine
+turning-point candidates are sparse.
+
+### Features (not fixed indicator triggers)
+
+The new model sees **40 completed candles × 20 channels = 800 inputs**:
+
+- **RSI14**: continuous value, including the user's areas of interest below
+  **20** (potential oversold reversal), above **70** (overbought), and the
+  **60–70** zone in possible pullbacks. These are **observations**, not
+  automatic buy/sell signals.
+- **Bollinger Bands (20, 2)**: position (%B), bandwidth, current upper/lower
+  touches and distance from the SMA20 middle.
+- **MACD (12, 26, 9)**: MACD, signal, histogram and histogram change.
+  MACD provides momentum context; it is **not** required to cross to classify.
+- **Candlestick/volatility**: OHLC relative returns, body, upper/lower wick
+  normalized by **ATR14**, volume and observed candle gaps. No artificial
+  candles are added across market closures.
+
+The custom NumPy CPU MLP is
+**800 → 512 → 256 → 128 → 64 → 3** by default, trained with class-weighted
+softmax cross entropy; the indicator pipeline uses only available past bars.
+You can supply smaller hidden widths for a quick smoke test.
+
+### What counts as a training reversal?
+
+There is **no unique objective ground truth for turning points**. v0.8 uses a
+precisely documented **price-only, past-only confirmation proxy** so RSI,
+Bollinger and MACD are not themselves the correct answers.
+
+For each latest **completed confirmation candle `t`**, a *candidate pivot*
+may have formed at **`t−1`**:
+
+1. A **bullish** reference requires a descending price context from the
+   20-bar historical OLS log-close slope **ending at `t−2`**, a 9-bar
+   local low at `t−1`, and a higher close at `t` by at least
+   **0.20 × ATR14[t−1]**, without a new lower low on `t`.
+2. A **bearish** reference is symmetric: ascending prior context, 9-bar
+   local high at `t−1`, a lower close by at least 0.20 ATR, and no new
+   higher high. The pre-move direction must exceed **0.35 ATR** in the
+   corresponding direction. Otherwise the reference is `none`.
+
+Every value in this rule is known **at or before the end of `t`**. The
+**earliest possible detection time is the close of `t`**; this program
+does **not** claim the turn was detected at `t−1`. No future close or
+future pivot is used in features, training labels, inference or evaluation.
+These constructed historical patterns are **not validated price turns**,
+reversal forecasts or guaranteed trade signals.
+
+### Training and evaluation
+
+Chronological **70/15/15 train/validation/reserved holdout** within
+`data/development.csv`, with a **40-candle purge** at each boundary to
+prevent overlapping training and validation input windows. Normalization and
+class weights are fitted on training only; the best seed/epoch is selected
+by **weighted validation loss**. No internal holdout or separately reserved
+`data/final_test.csv` is evaluated or used to select the model.
+
+Because `none` is likely the dominant label, inspect the **per-class
+precision/recall, confusion matrix and macro F1**, not just accuracy.
+Scores are **uncalibrated**; even high accuracy against a constructed
+historical label is **not evidence of real reversal forecasting skill**.
+
+### Commands
+
+```bash
+git pull origin main
+python -m finance_ai train-reversal --csv data/development.csv \
+  --out models/finance-v0.8 --epochs 100 --seeds 13 42 97
+```
+
+Progress (seed, epoch, weighted validation loss) is printed as training
+runs. For a quick CPU smoke test, use
+`--epochs 2 --seeds 42 --hidden 64 32 --out models/finance-v0.8-smoke`;
+keep that separate from the full checkpoint.
+
+To classify **the last completed candle**:
+
+```bash
+python -m finance_ai detect-reversal --csv data/development.csv \
+  --model models/finance-v0.8
+```
+
+The JSON gives one of `none`, `bullish_reversal`, `bearish_reversal`,
+uncalibrated class scores, an independent price-only reference,
+pre-move context, RSI thresholds (20/60/70), Bollinger touch/re-entry
+flags, and MACD histogram/cross. The pivot time shown is **historical**;
+the detection timestamp is **one closed candle later**.
+
+To visualize **the last 500 validation candles** with markers at the
+**confirmation candle** (not an earlier hindsight pivot), plus Bollinger
+bands and RSI thresholds:
+
+```bash
+python -m pip install -e '.[plot]'
+python -m finance_ai plot-reversals --csv data/development.csv \
+  --model models/finance-v0.8 --candles 500 \
+  --out charts/finance-v0.8-validation-500.png
+```
+
+Filled green/up and red/down triangles are **network outputs**; empty
+circles are price-only reference confirmations. Only the validation
+range is displayed; the reserved holdout and final test remain untouched.
+
+**Scope boundary:** this is *price-reversal candidate recognition*, not a
+change to v0.7 current-trend classification. Future turning-point
+prediction, trend/reversal combination and actual trade-entry logic are
+not included.
