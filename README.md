@@ -494,3 +494,62 @@ range is displayed; the reserved holdout and final test remain untouched.
 change to v0.7 current-trend classification. Future turning-point
 prediction, trend/reversal combination and actual trade-entry logic are
 not included.
+
+### v0.8 chronological 20-candle walk-forward signal review
+
+The **existing trained v0.8 checkpoint** can be replayed over completely
+new candles in **batches of 20 M15 candles**, without retraining or reading
+future candles for signal generation. This is a *fixed-horizon directional
+simulation*, not a broker backtest or a live trading system.
+
+At each step:
+
+1. After initial **100-candle indicator warmup**, reveal the next **20
+   closed candles**. Run v0.8 on **only the last completed candle of that
+   batch**, using the 40-bar causal feature lookback. Signals elsewhere
+   inside that 20-bar batch are **not sampled**.
+2. Issue a paper `BUY` / `SELL` candidate only when the network triangle
+   and price-reference circle agree on the **same direction** at the batch
+   boundary (otherwise `none`). The price-only reference is **the same
+   constructed training target**, not independent confirmation.
+3. On the **next** 20-candle batch, use its **first OPEN** as the paper
+   entry and its **20th CLOSE** as the fixed exit. Direction-adjusted price
+   movement above 0 is `WIN`, below 0 is `LOSS`, equal to 0 is `FLAT`.
+   Only **after that batch finishes** print the prior signal's outcome and
+   look for a new batch-ending signal. This avoids future leakage.
+4. Any final signal with no complete following batch stays `pending`.
+   Incomplete trailing candle groups are not evaluated.
+
+Use on an **unseen** MetaTrader M15 export (all rows must be closed candles):
+
+```bash
+git pull origin main
+python -m finance_ai walkforward-reversals \
+  --csv data/final_test.csv \
+  --model models/finance-v0.8 \
+  --batch-candles 20 \
+  --out reports/v0.8-test-20.csv
+```
+
+For the first ten batches only, add `--max-batches 10`. Optionally use
+`--cost-per-unit 0.5` to subtract **0.5 quote-price units per ounce**
+from each direction-adjusted move as an illustrative total round-trip cost;
+**default is zero cost**.
+
+The command prints every batch as it runs and saves two files:
+
+- `reports/v0.8-test-20.csv`: full timeline, model/reference labels,
+  any new signal, previous signal outcome, paper entry/exit prices, gross
+  and cost-adjusted price differences, return percentage, best and worst
+  intrabatch excursion.
+- `reports/v0.8-test-20.summary.json`: totals and `BUY`/`SELL` results,
+  directional win rates, unresolved signals, cost settings and assumptions.
+
+**Interpretation limits:** this only tests whether the chosen direction
+has a positive quote-price movement at a fixed 20-candle horizon.
+It **does not** simulate take profit/stop loss, spread variability,
+slippage, fees other than the optional simple fixed deduction, position
+size, leverage or actual realized P&L. **If you run this repeatedly
+on `final_test.csv` to change the strategy, that file is no longer
+an untouched final evaluation set**. Use another subsequently unseen
+period for a fair final assessment.

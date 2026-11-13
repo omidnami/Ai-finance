@@ -11,6 +11,7 @@ from .trend_detection import train_trend, detect_trend, DEFAULT_HIDDEN as TREND_
 from .trend_chart import plot_validation_trend
 from .reversal_detection import train_reversal, detect_reversal, DEFAULT_HIDDEN as REVERSAL_HIDDEN
 from .reversal_chart import plot_validation_reversals
+from .reversal_walkforward import run_reversal_walkforward
 
 
 def main():
@@ -86,6 +87,14 @@ def main():
     rev_plot.add_argument("--model", default="models/finance-v0.8")
     rev_plot.add_argument("--out", default="charts/finance-v0.8-validation-500.png")
     rev_plot.add_argument("--candles", type=int, default=500)
+    rev_walk = actions.add_parser("walkforward-reversals", help="Process test candles in 20-candle batches, resolve the previous signal in the next batch")
+    rev_walk.add_argument("--data", "--csv", "--excel", dest="data", required=True)
+    rev_walk.add_argument("--model", default="models/finance-v0.8")
+    rev_walk.add_argument("--out", default="reports/v0.8-walkforward.csv")
+    rev_walk.add_argument("--batch-candles", type=int, default=20)
+    rev_walk.add_argument("--max-batches", type=int, default=None, help="Process only N batches for a quick check")
+    rev_walk.add_argument("--cost-per-unit", type=float, default=0.0,
+                          help="Optional round-trip cost in XAUUSD quote-price units per ounce")
     prediction = actions.add_parser("predict", help="Predict after the latest completed candle")
     prediction.add_argument("--data", "--csv", "--excel", dest="data", required=True)
     prediction.add_argument("--model", default="models/finance-v0.2")
@@ -127,6 +136,13 @@ def main():
         output = detect_reversal(args.data, args.model)
     elif args.action == "plot-reversals":
         output = plot_validation_reversals(args.data, args.model, args.out, args.candles)
+    elif args.action == "walkforward-reversals":
+        result = run_reversal_walkforward(args.data, args.model, args.out,
+                                          batch_candles=args.batch_candles,
+                                          max_batches=args.max_batches,
+                                          cost_per_unit=args.cost_per_unit)
+        # The per-batch rows and summary have already been printed and saved.
+        return
     else:
         config = json.loads((Path(args.model) / "config.json").read_text(encoding="utf-8"))
         if config.get("model_version") in {"0.5.0", "0.6.0"}:
