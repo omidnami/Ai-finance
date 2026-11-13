@@ -58,3 +58,21 @@ def test_csv_feature_pipeline(tmp_path):
     assert data.features.shape[1] == 24
     assert np.isfinite(data.features).all()
     assert np.max(np.diff(data.timestamps)) > 900
+
+
+@pytest.mark.parametrize("separator", [",", "\\t", ";"])
+def test_csv_delimiters_from_metatrader(tmp_path, separator):
+    source = _excel(tmp_path, n=140)
+    original = pd.read_excel(source)
+    destination = tmp_path / "metatrader.csv"
+    original.to_csv(destination, index=False, sep=separator)
+    parsed = read_candles(destination)
+    pd.testing.assert_frame_equal(original, parsed)
+
+
+def test_utf8_bom_tab_separated_csv(tmp_path):
+    source = _excel(tmp_path, n=140)
+    original = pd.read_excel(source)
+    destination = tmp_path / "metatrader.csv"
+    original.to_csv(destination, index=False, sep="\\t", encoding="utf-8-sig")
+    pd.testing.assert_frame_equal(original, read_candles(destination))

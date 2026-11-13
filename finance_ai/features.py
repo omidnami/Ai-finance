@@ -44,7 +44,8 @@ def read_candles(path: str | Path) -> pd.DataFrame:
     path = Path(path)
     suffix = path.suffix.lower()
     if suffix == ".csv":
-        frame = pd.read_csv(path)
+        # MetaTrader exports can be comma- or tab-separated despite the .csv suffix.
+        frame = pd.read_csv(path, sep=None, engine="python", encoding="utf-8-sig")
     elif suffix in {".xlsx", ".xls"}:
         frame = pd.read_excel(path)
     else:

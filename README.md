@@ -4,7 +4,7 @@ A lightweight **financial neural network built from scratch with NumPy**, traine
 
 ## v0.1: what works
 
-- Reads `.csv`/`.xlsx`/`.xls` with `time, open, high, low, close, volume, timeframe` (Unix seconds, timeframe **15**).
+- Reads comma-, tab-, or semicolon-separated `.csv`, as well as `.xlsx`/`.xls`, with `time, open, high, low, close, volume, timeframe` (Unix seconds, timeframe **15**).
 - Computes MACD (12/26/9), RSI (14), SMA20, SMA50 using [`ta`](https://technical-analysis-library-in-python.readthedocs.io/en/latest/).
 - Adds UTC time, weekday, early/middle/late month, approximate Tokyo/London/New York session indicators (DST-aware), and actual candle gaps: **24 features/candle**.
 - Builds 20-candle rolling windows, predicts whether the **next available completed candle** closes above the last observed close.
