@@ -1,5 +1,11 @@
 # AI Finance
 
+**Current version: v0.6.0 — MACD-free, ATR-based three-class next-candle classifier.**
+The latest experiment uses 21 features per M15 candle plus five trend/ATR
+summaries (425 inputs) and predicts **down / neutral / up**; see
+[v0.6.0 details](#v060--macd-free-atr-three-class-classifier).
+Earlier experiments and checkpoints remain available.
+
 A small **CPU-only financial neural network built from scratch in NumPy**. It learns to predict the next available 15-minute candle's direction from real MetaTrader OHLCV exports. This is a research/learning project—not a trading system or financial advice.
 
 ## v0.2: trend-aware experiment
@@ -231,14 +237,15 @@ Model files: `model.npz`, `config.json`, `preprocessing.json`, `metrics.json`.
 These are experimental signals, not trading recommendations or validated
 probabilities of price movement.
 
-## v0.6: remove MACD from the ATR three-class model
+## v0.6.0 — MACD-free ATR three-class classifier
 
 `train-atr` now trains a fresh **MACD-free** 3-class classifier. No MACD
 indicators are calculated or provided to this model. RSI14, SMA20/SMA50,
 ATR14, time/session features, 20-candle history and five trend summaries
 are unchanged. Features drop from **24 to 21 per candle**; network input
-changes from **485 to 425**, while hidden layers remain
-`512 → 256 → 128 → 64` with 3-class softmax output. The train/validation
+changes from **485 to 425**, giving architecture
+**425 → 512 → 256 → 128 → 64 → 3** (**390,787 parameters**).
+Softmax outputs remain `down`, `neutral`, and `up`. The train/validation
 splits, 25% ATR label threshold, and validation-only selection are unchanged.
 
 ```bash
@@ -251,3 +258,24 @@ The `config.json` and `preprocessing.json` record the 21-feature schema and
 version `0.6.0`. Existing v0.1–v0.5 checkpoints remain readable for inference
 with their exact old schemas; do **not** overwrite a previous model directory.
 The final test set is still reserved and is never used for tuning.
+
+### v0.6.0 validation snapshot (M15 XAUUSD development data)
+
+For the same chronological validation window (**4,171 samples**) with
+ATR multiplier **0.25**, the user-run experiment returned:
+
+| Validation metric | v0.5 (MACD) | v0.6.0 (no MACD) |
+| --- | ---: | ---: |
+| Accuracy | 38.50% | 37.54% |
+| Balanced accuracy | 36.47% | 36.39% |
+| Macro F1 | 30.11% | 34.86% |
+| Cross-entropy loss | 1.08892 | 1.09323 |
+| Down precision | 27.78% | 31.07% |
+| Down recall | 0.41% | 15.16% |
+
+The **majority-class accuracy baseline is 37.09%**. Removing MACD makes
+DOWN predictions less rare and improves macro F1, but **does not establish
+better overall predictive performance**: validation loss and accuracy are
+slightly worse. The selected v0.6.0 run used seed **13**, epoch **3**.
+Neither the internal reserved holdout nor `data/final_test.csv` was used
+for selection/evaluation. These figures are **not** live trading results.
