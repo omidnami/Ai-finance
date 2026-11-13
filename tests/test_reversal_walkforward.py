@@ -1,4 +1,4 @@
-"""Verify 20-candle chronological v0.8 review: past-only signals, next-batch outcomes."""
+"""Test v0.8 sliding 40-candle window, one-candle steps, 20-candle outcomes."""
 import json
 
 import numpy as np
@@ -11,7 +11,6 @@ from finance_ai.reversal_walkforward import _assess, run_reversal_walkforward
 
 @pytest.fixture
 def test_candles(tmp_path):
-    # 360 closed M15 candles, sufficient for indicator warmup and 12+ steps.
     n = 360
     times = 1_745_362_800 + np.arange(n) * 900
     rng = np.random.default_rng(73)
@@ -57,7 +56,7 @@ def small_checkpoint(tmp_path):
     return root
 
 
-def test_next_batch_settlement_uses_open_and_last_close():
+def test_next_horizon_settlement_uses_open_and_last_close():
     opens = np.arange(100, 120, dtype=float)
     closes = opens + 0.5
     frame = pd.DataFrame({
@@ -81,54 +80,80 @@ def test_next_batch_settlement_uses_open_and_last_close():
     assert bear["result"] == "LOSS"
 
 
-def test_twenty_at_a_time_both_markers_then_next_batch_outcome(test_candles, small_checkpoint,
-                                                                monkeypatch, tmp_path):
+def test_window_moves_one_bar_and_overlapping_signals_are_all_settled(test_candles, small_checkpoint,
+                                                                         monkeypatch, tmp_path):
     from finance_ai import reversal_walkforward as module
-    class ThreeBatchModel:
+
+    class ThreeEarlySignals:
         calls = 0
         def forward(self, x):
-            assert x.shape == (1, 800)
+            assert x.shape == (1, 800)  # 40 historical candles, 20 channels each
             self.calls += 1
-            ix = min(self.calls, 3)  # bull, bear, bull, then none
-            if ix == 1 or ix == 3:
+            if self.calls in (1, 3):
                 return np.array([[.05, .90, .05]])
-            if ix == 2:
+            if self.calls == 2:
                 return np.array([[.05, .05, .90]])
             return np.array([[.90, .05, .05]])
-    model = ThreeBatchModel()
+
+    model = ThreeEarlySignals()
     monkeypatch.setattr(module, "_load_model", lambda _: (model, np.zeros(20), np.ones(20)))
-    reference_calls = [1, 2, 1]
-    def fake_reference(_d, ends):
-        return np.array([reference_calls.pop(0)]), np.array([0.0])
+    ref_calls = 0
+    def fake_reference(_data, ends):
+        nonlocal ref_calls
+        ref_calls += 1
+        return np.array([[1, 2, 1][ref_calls-1] if ref_calls <= 3 else 0]), np.array([0.0])
     monkeypatch.setattr(module, "reversal_reference", fake_reference)
+
     result = run_reversal_walkforward(str(test_candles), str(small_checkpoint),
-                                     str(tmp_path / "report.csv"), max_batches=3, echo=False)
+                                     str(tmp_path / "report.csv"), max_batches=23, echo=False)
     rows = result["batches"]
-    assert [r["new_signal"] for r in rows] == ["BUY", "SELL", "BUY"]
-    assert rows[0]["previous_result"] is None
-    assert rows[1]["previous_signal_batch"] == 1
-    assert rows[1]["previous_signal"] == "BUY"
-    assert rows[2]["previous_signal_batch"] == 2
-    assert rows[2]["previous_signal"] == "SELL"
-    # A candidate is never scored in the same batch it is issued.
-    assert rows[0]["entry_open"] is None
-    assert rows[1]["entry_open"] == pytest.approx(float(pd.read_csv(test_candles).iloc[120]["open"]))
-    assert rows[1]["exit_close"] == pytest.approx(float(pd.read_csv(test_candles).iloc[139]["close"]))
-    assert result["summary"]["total_signals"] == 3
-    assert result["summary"]["resolved_signals"] == 2
-    assert result["summary"]["pending_signal"] == "BUY"
-    saved = pd.read_csv(result["report_csv"])
-    assert len(saved) == 3
-    assert json.loads((tmp_path / "report.summary.json").read_text())["pending_signal"] == "BUY"
+    assert len(rows) == 23
+    assert [r["new_signal"] for r in rows[:4]] == ["BUY", "SELL", "BUY", "none"]
+    assert [r["previous_result"] for r in rows[:20]] == [None] * 20
+    assert rows[20]["previous_signal_step"] == 1
+    assert rows[21]["previous_signal_step"] == 2
+    assert rows[22]["previous_signal_step"] == 3
+    assert [r["previous_signal"] for r in rows[20:23]] == ["BUY", "SELL", "BUY"]
+    assert all(r["previous_result"] in {"WIN", "LOSS", "FLAT"} for r in rows[20:23])
+    raw = pd.read_csv(test_candles)
+    assert rows[20]["entry_open"] == pytest.approx(float(raw.iloc[110]["open"]))
+    assert rows[20]["exit_close"] == pytest.approx(float(raw.iloc[129]["close"]))
+    for n, row in enumerate(rows):
+        assert row["history_candles"] == 40
+        assert row["evaluation_horizon_candles"] == 20
+        assert row["window_end_utc"] == pd.Timestamp(int(raw.iloc[109+n]["time"]), unit="s", tz="UTC").isoformat()
+        assert row["window_start_utc"] == pd.Timestamp(int(raw.iloc[70+n]["time"]), unit="s", tz="UTC").isoformat()
+    summary = result["summary"]
+    assert summary["step_candles"] == 1
+    assert summary["total_signals"] == 3
+    assert summary["resolved_signals"] == 3
+    assert summary["pending_signals"] == 0
+    assert len(pd.read_csv(result["report_csv"])) == 23
+    assert json.loads((tmp_path / "report.summary.json").read_text())["pending_signals"] == 0
 
 
-def test_real_checkpoint_matches_prefix_inference_and_future_mutation(test_candles,
-                                                                       small_checkpoint, tmp_path):
+def test_partial_steps_leave_multiple_pending_signals(test_candles, small_checkpoint, monkeypatch, tmp_path):
+    from finance_ai import reversal_walkforward as module
+
+    class AlwaysBull:
+        def forward(self, x):
+            return np.array([[.01, .98, .01]])
+    monkeypatch.setattr(module, "_load_model", lambda _: (AlwaysBull(), np.zeros(20), np.ones(20)))
+    monkeypatch.setattr(module, "reversal_reference", lambda _, __: (np.array([1]), np.array([0.])))
+    result = run_reversal_walkforward(str(test_candles), str(small_checkpoint),
+                                     str(tmp_path / "pending.csv"), max_batches=3, echo=False)
+    assert result["summary"]["pending_signals"] == 3
+    assert result["summary"]["resolved_signals"] == 0
+    assert [x["pending_signals"] for x in result["steps"]] == [1, 2, 3]
+
+
+def test_real_checkpoint_matches_each_prefix_inference_and_future_mutation(test_candles,
+                                                                               small_checkpoint, tmp_path):
     report = run_reversal_walkforward(str(test_candles), str(small_checkpoint),
                                      str(tmp_path / "original.csv"), max_batches=4, echo=False)
     raw = pd.read_csv(test_candles)
-    for row in report["batches"]:
-        stop = 100 + row["batch"] * 20
+    for row in report["steps"]:
+        stop = 109 + row["step"]  # first step observes raw indices 0..109
         prefix = tmp_path / "prefix.csv"
         raw.iloc[:stop].to_csv(prefix, index=False)
         truth = detect_reversal(str(prefix), str(small_checkpoint))
@@ -136,8 +161,7 @@ def test_real_checkpoint_matches_prefix_inference_and_future_mutation(test_candl
         assert row["price_reference_class"] == truth["price_only_confirmed_reference"]
         assert row["model_score"] == pytest.approx(
             max(truth["scores_uncalibrated"].values()), abs=1e-12)
-    # Prices strictly after the first 4 batches cannot change those decisions
-    # even though the whole dataset is preprocessed once for efficiency.
+    # Mutating future prices cannot alter the four past-only predictions.
     changed = raw.copy()
     for c in ("open", "high", "low", "close"):
         changed.loc[180:, c] += 400
@@ -145,7 +169,7 @@ def test_real_checkpoint_matches_prefix_inference_and_future_mutation(test_candl
     changed.to_csv(altered_csv, index=False)
     modified = run_reversal_walkforward(str(altered_csv), str(small_checkpoint),
                                         str(tmp_path / "modified.csv"), max_batches=4, echo=False)
-    for left, right in zip(report["batches"], modified["batches"]):
+    for left, right in zip(report["steps"], modified["steps"]):
         for key in left:
             if key == "model_score":
                 assert left[key] == pytest.approx(right[key], abs=1e-12)
@@ -155,6 +179,7 @@ def test_real_checkpoint_matches_prefix_inference_and_future_mutation(test_candl
 
 def test_ref_mismatch_prevents_signal(test_candles, small_checkpoint, monkeypatch, tmp_path):
     from finance_ai import reversal_walkforward as module
+
     class AlwaysBull:
         def forward(self, x):
             return np.array([[.01, .98, .01]])
@@ -162,7 +187,7 @@ def test_ref_mismatch_prevents_signal(test_candles, small_checkpoint, monkeypatc
     monkeypatch.setattr(module, "reversal_reference", lambda _, __: (np.array([2]), np.array([0.])))
     result = run_reversal_walkforward(str(test_candles), str(small_checkpoint),
                                      str(tmp_path / "mismatch.csv"), max_batches=3, echo=False)
-    assert all(x["new_signal"] == "none" for x in result["batches"])
+    assert all(x["new_signal"] == "none" for x in result["steps"])
     assert result["summary"]["resolved_signals"] == 0
     assert result["summary"]["win_rate_resolved"] is None
 

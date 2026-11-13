@@ -87,12 +87,14 @@ def main():
     rev_plot.add_argument("--model", default="models/finance-v0.8")
     rev_plot.add_argument("--out", default="charts/finance-v0.8-validation-500.png")
     rev_plot.add_argument("--candles", type=int, default=500)
-    rev_walk = actions.add_parser("walkforward-reversals", help="Process test candles in 20-candle batches, resolve the previous signal in the next batch")
+    rev_walk = actions.add_parser("walkforward-reversals", help="Slide a 40-candle history one candle at a time; score signals after 20 subsequent candles")
     rev_walk.add_argument("--data", "--csv", "--excel", dest="data", required=True)
     rev_walk.add_argument("--model", default="models/finance-v0.8")
     rev_walk.add_argument("--out", default="reports/v0.8-walkforward.csv")
-    rev_walk.add_argument("--batch-candles", type=int, default=20)
-    rev_walk.add_argument("--max-batches", type=int, default=None, help="Process only N batches for a quick check")
+    rev_walk.add_argument("--horizon-candles", "--batch-candles", dest="batch_candles", type=int, default=20,
+                          help="Forward closed candles used to score each signal (default: 20); NOT a window step")
+    rev_walk.add_argument("--max-steps", "--max-batches", dest="max_batches", type=int, default=None,
+                          help="Process only N one-candle steps for a quick check")
     rev_walk.add_argument("--cost-per-unit", type=float, default=0.0,
                           help="Optional round-trip cost in XAUUSD quote-price units per ounce")
     prediction = actions.add_parser("predict", help="Predict after the latest completed candle")
@@ -141,7 +143,7 @@ def main():
                                           batch_candles=args.batch_candles,
                                           max_batches=args.max_batches,
                                           cost_per_unit=args.cost_per_unit)
-        # The per-batch rows and summary have already been printed and saved.
+        # The per-candle steps and summary have already been printed and saved.
         return
     else:
         config = json.loads((Path(args.model) / "config.json").read_text(encoding="utf-8"))

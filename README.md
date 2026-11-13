@@ -495,61 +495,64 @@ change to v0.7 current-trend classification. Future turning-point
 prediction, trend/reversal combination and actual trade-entry logic are
 not included.
 
-### v0.8 chronological 20-candle walk-forward signal review
+### v0.8 sliding-window walk-forward (40 history → 1-step → 20 future)
 
-The **existing trained v0.8 checkpoint** can be replayed over completely
-new candles in **batches of 20 M15 candles**, without retraining or reading
-future candles for signal generation. This is a *fixed-horizon directional
-simulation*, not a broker backtest or a live trading system.
+This command uses the **existing trained v0.8 checkpoint**; weights are
+unchanged. It is a *causal, fixed-horizon directional experiment*, not a
+live trading system or verified profitability backtest.
 
-At each step:
+**There are two different numbers:**
+- The **neural network requires 40 past closed M15 candles** per decision.
+  After the initial indicator warmup (at least 110 historical raw candles),
+  the 40-candle **input window slides forward by ONE candle each step**:
+  `[0..39] → [1..40] → [2..41] → …` (illustrative window offsets,
+  after warmup). The last completed candle of **every** window gets a
+  fresh reversal classification; intermediate bars are no longer skipped.
+- **20 future *observed* candles** are used only to **evaluate each previously
+  issued paper signal**. They are **never included in that signal's input**.
 
-1. After initial **100-candle indicator warmup**, reveal the next **20
-   closed candles**. Run v0.8 on **only the last completed candle of that
-   batch**, using the 40-bar causal feature lookback. Signals elsewhere
-   inside that 20-bar batch are **not sampled**.
-2. Issue a paper `BUY` / `SELL` candidate only when the network triangle
-   and price-reference circle agree on the **same direction** at the batch
-   boundary (otherwise `none`). The price-only reference is **the same
-   constructed training target**, not independent confirmation.
-3. On the **next** 20-candle batch, use its **first OPEN** as the paper
-   entry and its **20th CLOSE** as the fixed exit. Direction-adjusted price
-   movement above 0 is `WIN`, below 0 is `LOSS`, equal to 0 is `FLAT`.
-   Only **after that batch finishes** print the prior signal's outcome and
-   look for a new batch-ending signal. This avoids future leakage.
-4. Any final signal with no complete following batch stays `pending`.
-   Incomplete trailing candle groups are not evaluated.
+A BUY/SELL candidate is logged at candle `t` only if v0.8's class
+(triangle) and the price-only training reference (circle) **match in the
+same non-none direction**, as in the chart. The price-only reference is a
+*training proxy*, **not independent confirmation**.
 
-Use on an **unseen** MetaTrader M15 export (all rows must be closed candles):
+The hypothetical entry is **OPEN[t+1]**; the fixed exit is **CLOSE[t+20]**.
+Only once the 20th subsequent candle closes is that signal labeled `WIN`
+/ `LOSS` / `FLAT` from its directional price move (after an optional flat
+quote-price-unit cost). **Each signal is tracked separately**: if two
+candidates occur a candle apart, they can be *pending simultaneously*
+and resolve 20 candles after their respective confirmation times.
+Unresolved signals at the end stay `pending`; they are never assigned
+outcomes using unavailable future bars.
 
 ```bash
 git pull origin main
 python -m finance_ai walkforward-reversals \
   --csv data/final_test.csv \
   --model models/finance-v0.8 \
-  --batch-candles 20 \
+  --horizon-candles 20 \
   --out reports/v0.8-test-20.csv
 ```
 
-For the first ten batches only, add `--max-batches 10`. Optionally use
-`--cost-per-unit 0.5` to subtract **0.5 quote-price units per ounce**
-from each direction-adjusted move as an illustrative total round-trip cost;
-**default is zero cost**.
+For a quick sample, add `--max-steps 50` to review the first 50
+**consecutive one-candle steps** (10 steps are not enough for a 20-candle
+outcome). `--batch-candles` and `--max-batches` are still accepted as
+**backward-compatible aliases**, but they now mean the evaluation horizon
+and maximum number of **steps**, respectively—not the scanning stride.
 
-The command prints every batch as it runs and saves two files:
+The command prints each step and creates:
 
-- `reports/v0.8-test-20.csv`: full timeline, model/reference labels,
-  any new signal, previous signal outcome, paper entry/exit prices, gross
-  and cost-adjusted price differences, return percentage, best and worst
-  intrabatch excursion.
-- `reports/v0.8-test-20.summary.json`: totals and `BUY`/`SELL` results,
-  directional win rates, unresolved signals, cost settings and assumptions.
+- `reports/v0.8-test-20.csv`: one row per **observed candle**, 40-bar window
+  endpoints, fresh AI/reference labels and signal, any newly resolved
+  *previous* signal, entry and exit prices, directional move and excursion.
+- `reports/v0.8-test-20.summary.json`: total signals, resolved WIN/LOSS/FLAT,
+  unresolved pending signals, separate BUY/SELL statistics and assumptions.
 
-**Interpretation limits:** this only tests whether the chosen direction
-has a positive quote-price movement at a fixed 20-candle horizon.
-It **does not** simulate take profit/stop loss, spread variability,
-slippage, fees other than the optional simple fixed deduction, position
-size, leverage or actual realized P&L. **If you run this repeatedly
-on `final_test.csv` to change the strategy, that file is no longer
-an untouched final evaluation set**. Use another subsequently unseen
-period for a fair final assessment.
+Optional `--cost-per-unit 0.5` subtracts 0.5 quote-price units per ounce
+for each completed paper signal. Otherwise **cost is zero**.
+No stop loss, take profit, variable spread, slippage, position sizing,
+leverage or actual executed P&L is simulated. Even a WIN on the 20-candle
+directional test need not be a profitable or executable trade.
+**Repeated strategy tuning against `final_test.csv` uses up its status
+as an untouched final test**; reserve a newer, unseen period for a final
+unbiased evaluation.

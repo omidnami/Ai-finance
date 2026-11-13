@@ -1,15 +1,13 @@
-"""Batch-by-batch, chronological v0.8 signal review without model retraining.
+"""One-candle-at-a-time causal v0.8 reversal signal review.
 
-A batch's last *closed* candle is the only decision timestamp.  When both
-v0.8 and its causal price-only reference agree on a non-none reversal, a
-candidate is logged. The next batch of N observed candles evaluates that
-candidate from its first open to its last close.  No future candle can affect
-signal generation; evaluation happens one batch later.
+At each completed candle, evaluate the model's trailing 40-bar window and
+its price-only reference. An agreed candidate at t is paper-entered at
+OPEN[t+1] and scored only once CLOSE[t+horizon] is available. Several
+signals can be pending at once; each is evaluated independently.
 
-This is a direction-only, fixed-horizon *simulation*, not live execution or
-proof of profitability. Price-only reference is a training proxy, not an
-independent oracle. No stops, slippage, commission or leverage are assumed;
-optional cost is a synthetic price-unit deduction only.
+This is a fixed-horizon direction-only research simulation, not live trading.
+Price-only confirmation is the same label proxy used during training and is
+not an independent oracle. An optional flat price-unit cost is illustrative.
 """
 from __future__ import annotations
 
@@ -65,7 +63,7 @@ def _load_model(path: str):
 
 
 def _assess(signal: dict, raw: pd.DataFrame, start: int, stop: int, cost: float) -> dict:
-    """Score an *existing* signal using exactly the next full batch of bars."""
+    """Score one past signal only after all horizon candles have closed."""
     side = signal["signal"]
     if side not in ("BUY", "SELL"):
         raise ValueError("Only BUY/SELL signals can be assessed")
@@ -98,88 +96,105 @@ def run_reversal_walkforward(csv: str, model_dir: str, out: str,
                              batch_candles: int = 20, max_batches: int | None = None,
                              cost_per_unit: float = 0.0,
                              echo: bool = True) -> dict:
-    """Walk 20 (configurable) closed candles at a time, emitting auditable rows.
+    """Slide a 40-candle model window by ONE candle; score after `batch_candles`.
 
-    Uses the existing trained checkpoint, without touching holdouts or fitting
-    anything. Signals are issued only when AI==price-reference!=none, at the
-    batch-ending candle close. An open signal settles at the next complete
-    batch's closing price, assuming next batch's first open is the entry.
+    `batch_candles` is retained for backward CLI compatibility but now means
+    the EVALUATION HORIZON, not a 20-candle step. No future candles are read
+    when generating a signal. Outcomes from t are available only at t+horizon.
     """
     if isinstance(batch_candles, bool) or not isinstance(batch_candles, int) or batch_candles < 2:
-        raise ValueError("batch_candles must be >= 2")
+        raise ValueError("batch_candles (evaluation horizon) must be >= 2")
     if max_batches is not None and (isinstance(max_batches, bool) or not isinstance(max_batches, int) or max_batches < 1):
-        raise ValueError("max_batches must be >= 1")
+        raise ValueError("max_batches (maximum one-candle steps) must be >= 1")
     if not np.isfinite(cost_per_unit) or cost_per_unit < 0:
         raise ValueError("cost_per_unit must be nonnegative and finite")
     output = Path(out)
     if output.suffix.lower() != ".csv":
         raise ValueError("--out must be a .csv file")
+
     raw = read_candles(csv)
     data = prepare_reversal(csv)
     model, mu, sigma = _load_model(model_dir)
-    # Feature calculation is causal: restricting to <= ending timestamp gives
-    # identical vectors even if the rest of the file changes in the future.
-    first_feature_raw = int(np.searchsorted(raw["time"].to_numpy(), data.timestamps[0]))
-    min_seen = max(110, first_feature_raw + LOOKBACK)
-    first_end = ((min_seen + batch_candles - 1) // batch_candles) * batch_candles
-    complete_end = (len(raw) // batch_candles) * batch_candles
-    if complete_end < first_end:
-        raise ValueError("Not enough complete candles for initial warmup and first batch")
-    # By construction each decision uses one fully completed batch, and every
-    # settlement uses exactly the following completed batch (never a partial).
-    end_points = range(first_end, complete_end + 1, batch_candles)
-    if max_batches is not None:
-        end_points = list(end_points)[:max_batches]
-    rows, settled, outstanding = [], [], None
+    timestamps = raw["time"].to_numpy(dtype=np.int64)
     times = data.timestamps
-    for batch, end in enumerate(end_points, start=1):
-        start = end - batch_candles
-        prev = _assess(outstanding, raw, start, end, cost_per_unit) if outstanding else None
-        if prev:
-            settled.append(prev)
-        timestamp = int(raw.iloc[end - 1]["time"])
+    # Retain the same >=110-bar indicator warmup as the original code, and
+    # ensure 40 fully prepared feature rows are available at the first step.
+    first_feature_raw = int(np.searchsorted(timestamps, times[0]))
+    first_end = max(110, first_feature_raw + LOOKBACK)  # exclusive raw index
+    if len(raw) < first_end:
+        raise ValueError("Not enough completed candles for feature warmup")
+    last_end = len(raw)  # every closed candle is eligible, even near EOF
+    if max_batches is not None:
+        last_end = min(last_end, first_end + max_batches - 1)
+
+    # Due results are keyed by the raw *confirmation candle* index plus the
+    # full forward horizon. At most one can become due per one-candle step.
+    pending: dict[int, dict] = {}
+    rows: list[dict] = []
+    settled: list[dict] = []
+    for step, end in enumerate(range(first_end, last_end + 1), start=1):
+        t = end - 1
+        window_start = end - LOOKBACK
+        signal_close = float(raw.iloc[t]["close"])
+        timestamp = int(timestamps[t])
+
+        # Today's close can settle a signal issued 20 (or N) candles ago.
+        # No outcome is computed before its full horizon has elapsed.
+        due = pending.pop(t, None)
+        previous = None
+        if due is not None:
+            previous = _assess(due, raw, due["confirmation_index"] + 1,
+                               t + 1, cost_per_unit)
+            settled.append(previous)
+
         k = int(np.searchsorted(times, timestamp))
         if k >= len(times) or times[k] != timestamp or k < LOOKBACK - 1:
-            raise ValueError("Insufficient past-only indicators at batch end")
+            raise ValueError("Insufficient past-only indicators at window end")
         x = transform(data.features[k - LOOKBACK + 1:k + 1][None, ...], mu, sigma)
         scores = model.forward(x)[0]
         ai = CLASSES[int(scores.argmax())]
         ref = CLASSES[int(reversal_reference(data, np.asarray([k]))[0][0])]
-        signal = "BUY" if ai == ref == "bullish_reversal" else (
-                 "SELL" if ai == ref == "bearish_reversal" else "none")
+        side = "BUY" if ai == ref == "bullish_reversal" else (
+               "SELL" if ai == ref == "bearish_reversal" else "none")
+        if side != "none":
+            pending[t + batch_candles] = {
+                "batch": step, "signal": side, "confirmation_index": t,
+            }
         row = {
-            "batch": batch,
-            "batch_start_utc": _utc(int(raw.iloc[start]["time"])),
-            "batch_end_utc": _utc(timestamp),
-            "candle_count": batch_candles,
-            "signal_candle_close": float(raw.iloc[end - 1]["close"]),
+            "step": step,
+            "window_start_utc": _utc(int(timestamps[window_start])),
+            "window_end_utc": _utc(timestamp),
+            "history_candles": LOOKBACK,
+            "evaluation_horizon_candles": batch_candles,
+            "signal_candle_close": signal_close,
             "model_class": ai,
             "price_reference_class": ref,
             "model_score": float(scores.max()),
             "agreement": bool(ai == ref and ai != "none"),
-            "new_signal": signal,
-            "previous_signal_batch": prev["previous_signal_batch"] if prev else None,
-            "previous_signal": prev["previous_signal"] if prev else None,
-            "previous_result": prev["result"] if prev else None,
-            "entry_candle_utc": prev["entry_candle_utc"] if prev else None,
-            "entry_open": prev["entry_open"] if prev else None,
-            "exit_candle_utc": prev["exit_candle_utc"] if prev else None,
-            "exit_close": prev["exit_close"] if prev else None,
-            "gross_directional_move": prev["gross_directional_move"] if prev else None,
-            "net_directional_move": prev["net_directional_move"] if prev else None,
-            "net_return_pct": prev["net_return_pct"] if prev else None,
-            "max_favorable_excursion": prev["max_favorable_excursion"] if prev else None,
-            "max_adverse_excursion": prev["max_adverse_excursion"] if prev else None,
+            "new_signal": side,
+            "signal_evaluation_after_candles": batch_candles if side != "none" else None,
+            "previous_signal_step": previous["previous_signal_batch"] if previous else None,
+            "previous_signal": previous["previous_signal"] if previous else None,
+            "previous_result": previous["result"] if previous else None,
+            "entry_candle_utc": previous["entry_candle_utc"] if previous else None,
+            "entry_open": previous["entry_open"] if previous else None,
+            "exit_candle_utc": previous["exit_candle_utc"] if previous else None,
+            "exit_close": previous["exit_close"] if previous else None,
+            "gross_directional_move": previous["gross_directional_move"] if previous else None,
+            "net_directional_move": previous["net_directional_move"] if previous else None,
+            "net_return_pct": previous["net_return_pct"] if previous else None,
+            "max_favorable_excursion": previous["max_favorable_excursion"] if previous else None,
+            "max_adverse_excursion": previous["max_adverse_excursion"] if previous else None,
+            "pending_signals": len(pending),
         }
         rows.append(row)
-        outstanding = {"batch": batch, "signal": signal} if signal != "none" else None
         if echo:
-            outcome = (f"{prev['previous_signal']} {prev['result']} "
-                       f"(gross={prev['gross_directional_move']:+.3f}; "
-                       f"net={prev['net_directional_move']:+.3f}; "
-                       f"return={prev['net_return_pct']:+.3f}%)") if prev else "-"
-            print(f"[batch {batch:04d}] {_utc(timestamp)} | previous: {outcome} | "
-                  f"AI={ai} ref={ref} | new={signal}", flush=True)
+            outcome = (f"{previous['previous_signal']} {previous['result']} "
+                       f"(gross={previous['gross_directional_move']:+.3f}; "
+                       f"net={previous['net_directional_move']:+.3f}; "
+                       f"return={previous['net_return_pct']:+.3f}%)") if previous else "-"
+            print(f"[step {step:04d}] {_utc(timestamp)} | previous: {outcome} | "
+                  f"AI={ai} ref={ref} | new={side} | pending={len(pending)}", flush=True)
 
     wins = sum(x["result"] == "WIN" for x in settled)
     losses = sum(x["result"] == "LOSS" for x in settled)
@@ -191,6 +206,7 @@ def run_reversal_walkforward(csv: str, model_dir: str, out: str,
         outcomes_by_side[side] = {
             "signals": sum(r["new_signal"] == side for r in rows),
             "resolved": len(side_results),
+            "pending": sum(x["signal"] == side for x in pending.values()),
             "wins": side_wins,
             "losses": sum(x["result"] == "LOSS" for x in side_results),
             "flat": sum(x["result"] == "FLAT" for x in side_results),
@@ -200,33 +216,35 @@ def run_reversal_walkforward(csv: str, model_dir: str, out: str,
         }
     summary = {
         "model_version": VERSION,
-        "task": "causal_batch_reversal_signal_review_not_live_trading",
+        "task": "causal_sliding_window_reversal_signal_review_not_live_trading",
         "source": str(csv), "model": str(model_dir),
-        "batch_candles": batch_candles,
-        "signal_rule": "AI reversal class == price-only reference class != none at batch last closed candle",
-        "entry_rule": "following batch first candle OPEN",
-        "exit_rule": "following batch final candle CLOSE",
+        "step_candles": 1,
+        "history_candles": LOOKBACK,
+        "evaluation_horizon_candles": batch_candles,
+        "signal_rule": "AI reversal class == price-only reference class != none on latest closed candle",
+        "entry_rule": "next candle OPEN following confirmation close",
+        "exit_rule": f"CLOSE of {batch_candles}th subsequent candle",
         "cost_per_unit": float(cost_per_unit),
         "outcome_rule": "signed(exit_close - entry_open) - cost_per_unit; positive WIN, negative LOSS, zero FLAT",
-        "batches": len(rows),
+        "steps": len(rows),
         "total_signals": sum(r["new_signal"] != "none" for r in rows),
         "resolved_signals": len(settled), "wins": wins, "losses": losses, "flat": flats,
         "win_rate_resolved": float(wins / len(settled)) if settled else None,
         "mean_net_return_pct": (float(np.mean([x["net_return_pct"] for x in settled]))
                                 if settled else None),
         "outcomes_by_side": outcomes_by_side,
-        "ai_reversals_at_batch_end": sum(r["model_class"] != "none" for r in rows),
-        "price_reference_reversals_at_batch_end": sum(r["price_reference_class"] != "none" for r in rows),
-        "pending_signal": outstanding["signal"] if outstanding else None,
-        "note": ("Gross directional walk-forward proxy unless cost_per_unit specified. "
+        "ai_reversals_at_window_end": sum(r["model_class"] != "none" for r in rows),
+        "price_reference_reversals_at_window_end": sum(r["price_reference_class"] != "none" for r in rows),
+        "pending_signals": len(pending),
+        "pending_by_side": {side: sum(x["signal"] == side for x in pending.values())
+                            for side in ("BUY", "SELL")},
+        "unprocessed_candles": len(raw) - last_end,
+        "note": (f"Sliding {LOOKBACK}-candle history with one-candle steps. Independent "
+                 f"{batch_candles}-candle forward evaluation per signal; pending signals may overlap. "
                  "No stops, slippage, market execution or portfolio sizing. "
-                 "Price reference was used for model training, so agreement is not independent confirmation. "
+                 "Price reference was used for model training; agreement is not independent confirmation. "
                  "Do not tune on final_test.csv if reserving it as untouched final test."),
     }
-    # A max_batches run intentionally leaves more unprocessed candles than a
-    # complete run; distinguish it from a trailing incomplete batch.
-    summary["unprocessed_candles"] = len(raw) - (first_end + (len(rows) - 1) * batch_candles)
-    summary["incomplete_trailing_candles_ignored"] = len(raw) % batch_candles if max_batches is None else None
     output.parent.mkdir(parents=True, exist_ok=True)
     with output.open("w", newline="", encoding="utf-8-sig") as fh:
         writer = csv_module.DictWriter(fh, fieldnames=list(rows[0]))
@@ -236,9 +254,9 @@ def run_reversal_walkforward(csv: str, model_dir: str, out: str,
     json_file.write_text(json.dumps(summary, indent=2, ensure_ascii=False), encoding="utf-8")
     if echo:
         rate = f"{100 * summary['win_rate_resolved']:.2f}%" if settled else "n/a"
-        print(f"\nSUMMARY | batches={len(rows)} signals={summary['total_signals']} "
+        print(f"\nSUMMARY | steps={len(rows)} signals={summary['total_signals']} "
               f"resolved={len(settled)} wins={wins} losses={losses} flat={flats} "
-              f"win_rate={rate} pending={summary['pending_signal'] or '-'}", flush=True)
+              f"win_rate={rate} pending={len(pending)}", flush=True)
         print(f"Reports: {output} | {json_file}", flush=True)
-    return {"summary": summary, "batches": rows,
+    return {"summary": summary, "steps": rows, "batches": rows,
             "report_csv": str(output), "summary_json": str(json_file)}
