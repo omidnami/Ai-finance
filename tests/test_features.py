@@ -38,3 +38,23 @@ def test_invalid_timeframe_rejected(tmp_path):
     frame.to_excel(path, index=False)
     with pytest.raises(ValueError, match="timeframe=15"):
         read_candles(path)
+
+
+def test_csv_import_matches_excel(tmp_path):
+    excel_path = _excel(tmp_path, gap=True)
+    csv_path = tmp_path / "candles.csv"
+    pd.read_excel(excel_path).to_csv(csv_path, index=False)
+    excel = read_candles(excel_path)
+    csv = read_candles(csv_path)
+    pd.testing.assert_frame_equal(excel, csv)
+
+
+def test_csv_feature_pipeline(tmp_path):
+    pytest.importorskip("ta")
+    excel_path = _excel(tmp_path, gap=True)
+    csv_path = tmp_path / "candles.csv"
+    pd.read_excel(excel_path).to_csv(csv_path, index=False)
+    data = prepare(csv_path)
+    assert data.features.shape[1] == 24
+    assert np.isfinite(data.features).all()
+    assert np.max(np.diff(data.timestamps)) > 900

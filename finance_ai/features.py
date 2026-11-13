@@ -1,4 +1,4 @@
-"""Shared Excel -> causal features pipeline for training and inference."""
+"""Shared CSV/Excel -> causal features pipeline for training and inference."""
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -42,9 +42,13 @@ def _sessions(timestamp: pd.Timestamp) -> tuple[float, float, float]:
 
 def read_candles(path: str | Path) -> pd.DataFrame:
     path = Path(path)
-    if path.suffix.lower() not in {".xlsx", ".xls"}:
-        raise ValueError("Expected an Excel .xlsx or .xls file")
-    frame = pd.read_excel(path)
+    suffix = path.suffix.lower()
+    if suffix == ".csv":
+        frame = pd.read_csv(path)
+    elif suffix in {".xlsx", ".xls"}:
+        frame = pd.read_excel(path)
+    else:
+        raise ValueError("Expected a MetaTrader .csv, .xlsx or .xls file")
     frame.columns = [str(c).strip().lower() for c in frame.columns]
     required = {"time", "open", "high", "low", "close", "volume", "timeframe"}
     missing = required.difference(frame.columns)

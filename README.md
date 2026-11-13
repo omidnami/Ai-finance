@@ -1,10 +1,10 @@
 # AI Finance
 
-A lightweight **financial neural network built from scratch with NumPy**, trained on CPU using real 15-minute MetaTrader Excel candles. The first version is an educational experiment in learning and evaluating next-candle direction; **it does not place trades**.
+A lightweight **financial neural network built from scratch with NumPy**, trained on CPU using real 15-minute MetaTrader CSV/Excel candles. The first version is an educational experiment in learning and evaluating next-candle direction; **it does not place trades**.
 
 ## v0.1: what works
 
-- Reads `.xlsx`/`.xls` with `time, open, high, low, close, volume, timeframe` (Unix seconds, timeframe **15**).
+- Reads `.csv`/`.xlsx`/`.xls` with `time, open, high, low, close, volume, timeframe` (Unix seconds, timeframe **15**).
 - Computes MACD (12/26/9), RSI (14), SMA20, SMA50 using [`ta`](https://technical-analysis-library-in-python.readthedocs.io/en/latest/).
 - Adds UTC time, weekday, early/middle/late month, approximate Tokyo/London/New York session indicators (DST-aware), and actual candle gaps: **24 features/candle**.
 - Builds 20-candle rolling windows, predicts whether the **next available completed candle** closes above the last observed close.
@@ -14,7 +14,7 @@ A lightweight **financial neural network built from scratch with NumPy**, traine
 
 ## Quick start (Ubuntu / Linux)
 
-Requires **Python 3.10+** (3.12 recommended), a CPU, and an Excel file exported from MetaTrader.
+Requires **Python 3.10+** (3.12 recommended), a CPU, and a CSV or Excel file exported from MetaTrader.
 
 ```bash
 git clone https://github.com/omidnami/Ai-finance.git
@@ -24,16 +24,16 @@ source .venv/bin/activate
 python -m pip install -e '.[dev]'
 ```
 
-Copy your **15-minute** candle file somewhere on your computer (e.g. `data/history.xlsx`); raw Excel and trained model outputs are gitignored.
+Copy your **15-minute** candle file somewhere on your computer (e.g. `data/history.csv`); raw Excel and trained model outputs are gitignored.
 
 ```bash
-python -m finance_ai train --excel data/history.xlsx --out models/finance-v0.1
+python -m finance_ai train --csv data/history.csv --out models/finance-v0.1
 ```
 
 To run a quick smoke test on fewer epochs:
 
 ```bash
-python -m finance_ai train --excel data/history.xlsx --out models/finance-v0.1 --epochs 5 --seeds 42
+python -m finance_ai train --csv data/history.csv --out models/finance-v0.1 --epochs 5 --seeds 42
 ```
 
 Model artifacts:
@@ -49,10 +49,10 @@ models/finance-v0.1/
 Inference uses **the same indicator and time-feature service**:
 
 ```bash
-python -m finance_ai predict --excel data/recent_candles.xlsx --model models/finance-v0.1
+python -m finance_ai predict --csv data/recent_candles.csv --model models/finance-v0.1
 ```
 
-Use enough historical **closed** candles in the prediction Excel file for MA50/MACD warmup + 20-candle lookback (100+ recommended). Output is an **uncalibrated** upward probability; it is not a guaranteed real-world probability.
+Use enough historical **closed** candles in the prediction CSV file for MA50/MACD warmup + 20-candle lookback (100+ recommended). Output is an **uncalibrated** upward probability; it is not a guaranteed real-world probability.
 
 To run tests:
 
@@ -60,7 +60,7 @@ To run tests:
 python -m pytest -q
 ```
 
-## Input definition
+**Note:** Version 0.1 requires timeframe `15` in every row. A CSV exported as M5 (`timeframe=5`) will be rejected. A 100-candle file can test the importer and indicators, but is too short for the current train/validation/test split; use at least 200 closed M15 candles for the minimal training smoke test, and preferably much more.\n\n## Input definition
 
 | Field | Definition |
 | --- | --- |
@@ -69,7 +69,7 @@ python -m pytest -q
 | `volume` | Nonnegative reported volume (could be tick volume depending on source) |
 | `timeframe` | `15` for every row |
 
-Data must be in ascending time order, without duplicated timestamps. Valid market closures, weekends, and holidays can cause **gaps**; no synthetic candles are inserted. Session flags are simple time-window approximations (Tokyo 09–18, London 08–17, New York 08–17 in local time, weekdays), **not official exchange opening calendars**. Verify MetaTrader timestamps and broker time-zone conventions before training; if the Excel `time` values are broker-local rather than UTC epoch seconds, convert them first.
+Data must be in ascending time order, without duplicated timestamps. Valid market closures, weekends, and holidays can cause **gaps**; no synthetic candles are inserted. Session flags are simple time-window approximations (Tokyo 09–18, London 08–17, New York 08–17 in local time, weekdays), **not official exchange opening calendars**. Verify MetaTrader timestamps and broker time-zone conventions before training; if the input `time` values are broker-local rather than UTC epoch seconds, convert them first.
 
 The 24-feature specification is in `finance_ai/features.py` and can be versioned for future models. If features or network dimensions change, old checkpoints are **not** automatically compatible.
 
