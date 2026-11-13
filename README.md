@@ -178,3 +178,55 @@ python -m finance_ai predict --csv data/recent_candles.csv \
 
 The names are examples: use the **actual selected checkpoint**, not necessarily
 `small`. All models are research experiments; accuracy does not imply profit.
+
+## v0.5: wider network, three-way ATR classification
+
+The existing v0.1-v0.4 commands and model directories are unchanged. The new
+experiment predicts whether the **next closed M15 candle** rises materially,
+falls materially, or remains within an ATR-scaled neutral band.
+
+- Features: same 20 × 24 + 5 = **485** inputs as v0.2-v0.4.
+- Default MLP: **485 → 512 → 256 → 128 → 64 → 3** (**421,507** learnable
+  parameters), versus 72,577 in the v0.4 large binary network. Extra neurons
+  are **not evidence of better out-of-sample performance**; this is an
+  intentionally larger experiment. Hidden widths are configurable to fit
+  CPU/RAM limits; larger models train more slowly.
+- Classes: `down`, `neutral`, `up`. Let `d = close[t+1] - close[t]`, and
+  `threshold = 0.25 * ATR14[t]` (from **the most recent completed candle**).
+  `d < -threshold` → down; `d > threshold` → up; otherwise neutral.
+  The default threshold can be changed with `--atr-multiplier`.
+- Training: 3-class **softmax** and **categorical cross-entropy**, trained with
+  custom NumPy backprop + AdamW and early stopping.
+- Measures not only accuracy and validation cross-entropy but also 3-class
+  confusion matrix (rows=true, columns=predicted), per-class recall/precision,
+  macro F1, balanced accuracy, majority accuracy, and validation cross-entropy
+  of the training-class-prior baseline. High neutral-class accuracy alone is
+  not sufficient evidence of predictive skill.
+- Uses the **same historical window endpoints and eight-candle purge** as
+  v0.3/v0.4, training-only normalization, and **validation-loss-only** seed
+  selection. The internal 15% holdout and external `data/final_test.csv` are
+  **not evaluated** by this command. Old binary and new ternary losses are
+  not directly comparable; the label problem is different.
+
+```bash
+git pull origin main
+python -m finance_ai train-atr --csv data/development.csv \
+  --out models/finance-v0.5 --epochs 100 --seeds 13 42 97
+```
+
+For an optional smaller CPU trial, add `--hidden 256 128 64` to the above
+command and choose another output directory so checkpoints are not replaced.
+For an optional larger trial, use `--hidden 1024 512 256 128 64`, **only if your
+hardware can handle the increased compute** and the validation result justifies
+it. These are not automatically searched.
+
+Inference returns all three **uncalibrated** probabilities and the top class:
+
+```bash
+python -m finance_ai predict --csv data/recent_candles.csv \
+  --model models/finance-v0.5
+```
+
+Model files: `model.npz`, `config.json`, `preprocessing.json`, `metrics.json`.
+These are experimental signals, not trading recommendations or validated
+probabilities of price movement.
