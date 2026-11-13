@@ -5,10 +5,11 @@ from pathlib import Path
 
 from .experiment import Settings, predict, train
 from .horizons import compare_horizons
+from .architectures import compare_architectures
 
 
 def main():
-    parser = argparse.ArgumentParser(description="AI Finance: CPU-only neural network v0.3")
+    parser = argparse.ArgumentParser(description="AI Finance: CPU-only neural network v0.4")
     actions = parser.add_subparsers(dest="action", required=True)
     training = actions.add_parser("train", help="Train and evaluate on chronological splits")
     training.add_argument("--data", "--csv", "--excel", dest="data", required=True, help="MetaTrader M15 .csv/.xlsx/.xls export")
@@ -26,6 +27,14 @@ def main():
     comparison.add_argument("--lr", type=float, default=0.001)
     comparison.add_argument("--patience", type=int, default=12)
     comparison.add_argument("--seeds", type=int, nargs="+", default=[13, 42, 97])
+    architectures = actions.add_parser("compare-architectures", help="Compare MLP sizes for one M15 candle using validation only")
+    architectures.add_argument("--data", "--csv", "--excel", dest="data", required=True)
+    architectures.add_argument("--out", default="models/finance-v0.4")
+    architectures.add_argument("--epochs", type=int, default=100)
+    architectures.add_argument("--batch-size", type=int, default=64)
+    architectures.add_argument("--lr", type=float, default=0.001)
+    architectures.add_argument("--patience", type=int, default=12)
+    architectures.add_argument("--seeds", type=int, nargs="+", default=[13, 42, 97])
     prediction = actions.add_parser("predict", help="Predict after the latest completed candle")
     prediction.add_argument("--data", "--csv", "--excel", dest="data", required=True)
     prediction.add_argument("--model", default="models/finance-v0.2")
@@ -35,6 +44,10 @@ def main():
                         lr=args.lr, patience=args.patience, seeds=tuple(args.seeds)))
     elif args.action == "compare-horizons":
         output = compare_horizons(args.data, args.out,
+                Settings(epochs=args.epochs, batch_size=args.batch_size,
+                         lr=args.lr, patience=args.patience, seeds=tuple(args.seeds)))
+    elif args.action == "compare-architectures":
+        output = compare_architectures(args.data, args.out,
                 Settings(epochs=args.epochs, batch_size=args.batch_size,
                          lr=args.lr, patience=args.patience, seeds=tuple(args.seeds)))
     else:

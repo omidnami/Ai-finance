@@ -135,3 +135,46 @@ The v0.3 comparison command does not evaluate even the internal reserved
 15% development holdout. A final unbiased test requires data not used during
 tuning. This is a research experiment; outputs are uncalibrated and are not
 investment recommendations.
+
+## v0.4: compare network sizes (fixed 15-minute target)
+
+Version 0.4 keeps the **same 485 inputs**, derived from the same 20-candle
+windows and indicators, and holds the target constant at the direction of
+the *next completed M15 candle*. Four fresh networks are trained separately:
+
+| Name | Architecture |
+| --- | --- |
+| large (v0.2/v0.3 control) | `485 → 128 → 64 → 32 → 1` |
+| medium | `485 → 64 → 32 → 1` |
+| small | `485 → 32 → 16 → 1` |
+| linear baseline | `485 → 1` |
+
+These use the **exact same chronological training/validation windows as the
+v0.3 h1 run**, including the 8-candle boundary purge. The scaler is fitted
+exclusively on training windows, and the chosen seed/epoch and architecture
+minimize **validation loss**. Neither the internal holdout nor
+`data/final_test.csv` is evaluated by this command.
+
+```bash
+git pull origin main
+python -m finance_ai compare-architectures \
+  --csv data/development.csv \
+  --out models/finance-v0.4 \
+  --epochs 100 --seeds 13 42 97
+```
+
+The summary is `models/finance-v0.4/comparison.json`. Individual checkpoints
+are in `large/`, `medium/`, `small/` and `linear/`, each with its own
+`model.npz`, `config.json`, `preprocessing.json` and `metrics.json`.
+Existing v0.1/v0.2/v0.3 checkpoints are still readable for inference.
+
+For example, to predict with the selected checkpoint (`selected_model` in
+the report):
+
+```bash
+python -m finance_ai predict --csv data/recent_candles.csv \
+  --model models/finance-v0.4/small
+```
+
+The names are examples: use the **actual selected checkpoint**, not necessarily
+`small`. All models are research experiments; accuracy does not imply profit.
