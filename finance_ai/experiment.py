@@ -156,21 +156,25 @@ def predict(excel: str, model_dir: str) -> float:
     prep = json.loads((root / "preprocessing.json").read_text(encoding="utf-8"))
     common_ok = (cfg.get("features") == list(FEATURE_NAMES) and cfg.get("lookback") == LOOKBACK
                  and cfg.get("timeframe") == 15)
+    v3 = (prep.get("version") == 3 and cfg.get("model_version") == "0.3.0"
+          and cfg.get("horizon_candles") in (1, 4, 8)
+          and cfg.get("architecture") == list(LAYERS)
+          and cfg.get("trend_features") == list(TREND_FEATURE_NAMES))
     v2 = (prep.get("version") == 2 and cfg.get("architecture") == list(LAYERS)
           and cfg.get("trend_features") == list(TREND_FEATURE_NAMES))
     v1_layers = (480, 128, 64, 32, 1)
     v1 = (prep.get("version") == 1 and cfg.get("architecture") == list(v1_layers)
           and "trend_features" not in cfg)
-    if not common_ok or not (v1 or v2):
+    if not common_ok or not (v1 or v2 or v3):
         raise ValueError("Incompatible model configuration")
-    sizes = LAYERS if v2 else v1_layers
+    sizes = LAYERS if (v2 or v3) else v1_layers
     model = MLP(sizes=sizes)
     with np.load(root / "model.npz", allow_pickle=False) as checkpoint:
         model.load_state_dict(checkpoint)
     data = prepare(excel)
     mean = np.asarray(prep["mean"], dtype=np.float64)
     std = np.asarray(prep["std"], dtype=np.float64)
-    if v2:
+    if v2 or v3:
         x, extra = latest_window_v2(data)
         x = transform_v2(x[None, ...], extra[None, ...], mean, std,
                          np.asarray(prep["trend_mean"], dtype=np.float64),

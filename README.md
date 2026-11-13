@@ -93,3 +93,45 @@ python -m pytest -q
 ## License
 
 Apache License 2.0 (see `LICENSE`).
+
+## v0.3: compare forecast horizons (1, 4, 8 closed M15 candles)
+
+Version 0.3 keeps the exact **485 → 128 → 64 → 32 → 1** architecture,
+24 per-candle features, and five trend/ATR features from v0.2. It changes
+**only the training target**, not the model input. For the last observed
+closed candle `t`, each horizon `h` uses the label:
+
+`close[t+h] > close[t]` (tie = down). Horizon 4 is four **traded** candles
+later, nominally one hour; market closures can make elapsed wall time longer.
+
+To perform a fair comparison all three models use the **same input windows**,
+with identical train/validation boundaries and training-only normalization.
+An eight-candle gap is purged before each split boundary so future target
+prices cannot cross into validation from training or into the withheld portion
+from validation. Each horizon has its own trained weights and validation loss.
+The best is selected **solely by validation loss**, not by the internal test.
+
+```bash
+git pull origin main
+python -m pip install -e '.[dev]'
+python -m finance_ai compare-horizons --csv data/development.csv \
+  --out models/finance-v0.3 --epochs 100 --seeds 13 42 97
+```
+
+Results are saved to `models/finance-v0.3/comparison.json` and to separate
+`h1/`, `h4/`, `h8/` folders containing `model.npz`, `config.json`,
+`preprocessing.json`, and `metrics.json`. The JSON identifies the selected
+model path. To predict with the winner, use for example:
+
+```bash
+python -m finance_ai predict --csv data/recent_candles.csv \
+  --model models/finance-v0.3/h4
+```
+
+The prediction JSON includes `horizon_candles` so a four-candle forecast is
+not mistaken for a next-candle forecast. Existing v0.1/v0.2 inference remains
+supported. **Do not use `data/final_test.csv` for comparison or tuning.**
+The v0.3 comparison command does not evaluate even the internal reserved
+15% development holdout. A final unbiased test requires data not used during
+tuning. This is a research experiment; outputs are uncalibrated and are not
+investment recommendations.
