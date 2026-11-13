@@ -1,11 +1,6 @@
 # AI Finance
 
-**Current development version: v0.7.0 — detection of the current XAUUSD M15 trend.**
-It labels the present state as **uptrend / downtrend**, using only closed historical candles.
-There is **no future forecast or reversal/entry signal** in v0.7; older v0.1–v0.6 experiments remain available.
-The v0.6.0 release remains documented below.
-
-A small **CPU-only financial neural network built from scratch in NumPy** using MetaTrader OHLCV candles. Earlier versions experimented with next-candle forecasts; v0.7 focuses only on recognizing the **current** market trend. This is a research/learning project—not a trading system or financial advice.
+A small **CPU-only financial neural network built from scratch in NumPy**. It learns to predict the next available 15-minute candle's direction from real MetaTrader OHLCV exports. This is a research/learning project—not a trading system or financial advice.
 
 ## v0.2: trend-aware experiment
 
@@ -236,15 +231,14 @@ Model files: `model.npz`, `config.json`, `preprocessing.json`, `metrics.json`.
 These are experimental signals, not trading recommendations or validated
 probabilities of price movement.
 
-## v0.6.0 — MACD-free ATR three-class classifier
+## v0.6: remove MACD from the ATR three-class model
 
 `train-atr` now trains a fresh **MACD-free** 3-class classifier. No MACD
 indicators are calculated or provided to this model. RSI14, SMA20/SMA50,
 ATR14, time/session features, 20-candle history and five trend summaries
 are unchanged. Features drop from **24 to 21 per candle**; network input
-changes from **485 to 425**, giving architecture
-**425 → 512 → 256 → 128 → 64 → 3** (**390,787 parameters**).
-Softmax outputs remain `down`, `neutral`, and `up`. The train/validation
+changes from **485 to 425**, while hidden layers remain
+`512 → 256 → 128 → 64` with 3-class softmax output. The train/validation
 splits, 25% ATR label threshold, and validation-only selection are unchanged.
 
 ```bash
@@ -258,97 +252,31 @@ version `0.6.0`. Existing v0.1–v0.5 checkpoints remain readable for inference
 with their exact old schemas; do **not** overwrite a previous model directory.
 The final test set is still reserved and is never used for tuning.
 
-### v0.6.0 validation snapshot (M15 XAUUSD development data)
+### v0.7 visual review — 500 validation candles
 
-For the same chronological validation window (**4,171 samples**) with
-ATR multiplier **0.25**, the user-run experiment returned:
+Render the trained v0.7 checkpoint **without retraining**. The chart shows
+XAUUSD M15 candlesticks, light green/red shading for the model's *current*
+uptrend/downtrend classification, EMA10, Bollinger Bands (20,2), and two
+colored ribbons: **AI v0.7** versus the **32-bar historical OLS-slope proxy**.
+The two ribbons may disagree; this is useful for inspecting transition periods.
 
-| Validation metric | v0.5 (MACD) | v0.6.0 (no MACD) |
-| --- | ---: | ---: |
-| Accuracy | 38.50% | 37.54% |
-| Balanced accuracy | 36.47% | 36.39% |
-| Macro F1 | 30.11% | 34.86% |
-| Cross-entropy loss | 1.08892 | 1.09323 |
-| Down precision | 27.78% | 31.07% |
-| Down recall | 0.41% | 15.16% |
-
-The **majority-class accuracy baseline is 37.09%**. Removing MACD makes
-DOWN predictions less rare and improves macro F1, but **does not establish
-better overall predictive performance**: validation loss and accuracy are
-slightly worse. The selected v0.6.0 run used seed **13**, epoch **3**.
-Neither the internal reserved holdout nor `data/final_test.csv` was used
-for selection/evaluation. These figures are **not** live trading results.
-
-## v0.7.0 — Current-trend recognition (no prediction)
-
-**Scope:** classify the current XAUUSD M15 regime as exactly **uptrend** or
-**downtrend** using only the candles that have already closed. No reversal
-detection, future-price targets, entry signals, or trading decisions.
-This is a **separate model and command**: v0.1–v0.6 checkpoints are untouched.
-
-### Indicators and input features
-
-| Indicator | Configuration | Purpose |
-| --- | --- | --- |
-| Bollinger Bands | **20 periods, 2 standard deviations** | %B, relative width, SMA20 middle-line slope |
-| Single moving average | **EMA10** | EMA slope, its distance from the Bollinger SMA20 middle line; report bullish/bearish line crossings |
-| Aroon Up / Down | **25 periods** (26 observed bars in the `ta` convention) | Recency of highs and lows; up/down spread |
-| ATR | **14 periods** (Wilder smoothing) | Volatility-adjusted strength and relative ATR input |
-
-The model also receives normalized OHLC returns, log tick volume, and real
-candle gaps. **15 features × 40 completed M15 candles = 600 inputs**.
-This new pipeline does **not** use MACD, RSI, or SMA50. Indicator calculations
-use pandas/NumPy, not an additional dependency; they are historical-only.
-The MLP defaults to **600 → 512 → 256 → 128 → 64 → 1** with a binary sigmoid
-output (custom NumPy backpropagation and AdamW). Hidden sizes can be adjusted.
-
-### Training-reference definition and important limitations
-
-There is no unique objective ground-truth label for 'current trend'.
-For this first experiment we assign an **explicit causal reference label**:
-run ordinary least squares on **log(close) for the trailing 32 completed bars**,
-ending at time `t`. Positive or zero slope → `uptrend`; negative slope →
-`downtrend`. No `t+1` candle, future extrema, or future ATR is used.
-
-**Crucial:** This tests whether the neural network can **reproduce a
-historical price-slope definition**, not whether its market interpretation
-is correct or whether future prices will rise/fall. The label is not derived
-from Aroon or EMA crossings, so the model is not merely copying those specific
-indicators; it is still learning a **constructed label from the same past data**.
-When the slope's net 32-bar move is smaller than **0.5 ATR14**, the report flags
-`weak_price_trend`, but outputs remain binary per specification. The sigmoid
-score is **uncalibrated**, not a reliable 80%-confidence promise.
-
-Use chronological **70% train / 15% validation / 15% reserved internal
-holdout** within `data/development.csv`. Scaling is fitted on training only;
-seed/epoch selection uses validation loss only. Neither the internal reserved
-holdout nor external `data/final_test.csv` is evaluated in training.
-Validation includes majority-class, previous-trend **persistence**, and EMA10
-vs Bollinger-middle baselines, so a high accuracy cannot be mistaken for an
-independent forecast result.
-
-### Commands
+Matplotlib is an **optional plotting-only dependency**:
 
 ```bash
-git pull origin main
-python -m finance_ai train-trend --csv data/development.csv \
-  --out models/finance-v0.7 --epochs 100 --seeds 13 42 97
+python -m pip install -e '.[plot]'
+python -m finance_ai plot-trend \
+  --csv data/development.csv \
+  --model models/finance-v0.7 \
+  --candles 500 \
+  --out charts/finance-v0.7-validation-500.png
 ```
 
-To classify the **current last completed candle** after training (supply enough
-recent history to warm up Aroon25/BB20 and feed all 40 feature candles):
-
-```bash
-python -m finance_ai detect-trend --csv data/development.csv \
-  --model models/finance-v0.7
-```
-
-For a smaller CPU smoke test use `--epochs 2 --seeds 42 --hidden 64 32`
-with **a different output directory**; that checkpoint has a different
-architecture. `train-trend` writes `model.npz`, `config.json`,
-`preprocessing.json`, and `metrics.json`. The `detect-trend` JSON provides
-the trend, both uncalibrated scores, weak-trend flag, timestamp, indicator
-snapshot, and EMA10/SMA20 crossing direction. It assumes the supplied export
-contains **only closed candles**.
-
-**v0.8 reversal-point detection is intentionally out of scope.**
+Open the generated PNG at `charts/finance-v0.7-validation-500.png`.
+`--candles` controls how many consecutive validation candles to display.
+The command intentionally selects the **last 500 completed candles from the
+chronological validation segment of `development.csv`**, **not** the latest 500
+candles in the file, which would expose the reserved internal holdout. The
+separately reserved `final_test.csv` is never inspected. No forecasts,
+reversal/entry signals, training, checkpoint modifications, or automatic
+parameter selection are performed. The printed agreement rate measures
+matching a constructed historical reference; **not** real-market accuracy.

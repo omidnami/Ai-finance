@@ -8,6 +8,7 @@ from .horizons import compare_horizons
 from .architectures import compare_architectures
 from .atr import train_atr, predict_atr, DEFAULT_HIDDEN, DEFAULT_ATR_MULTIPLIER
 from .trend_detection import train_trend, detect_trend, DEFAULT_HIDDEN as TREND_HIDDEN
+from .trend_chart import plot_validation_trend
 
 
 def main():
@@ -61,6 +62,11 @@ def main():
     trend_detection = actions.add_parser("detect-trend", help="Recognize current trend using completed candles")
     trend_detection.add_argument("--data", "--csv", "--excel", dest="data", required=True)
     trend_detection.add_argument("--model", default="models/finance-v0.7")
+    trend_chart = actions.add_parser("plot-trend", help="Plot last N validation candles with v0.7 up/down trend bands")
+    trend_chart.add_argument("--data", "--csv", "--excel", dest="data", required=True)
+    trend_chart.add_argument("--model", default="models/finance-v0.7")
+    trend_chart.add_argument("--out", default="charts/finance-v0.7-validation-500.png")
+    trend_chart.add_argument("--candles", type=int, default=500)
     prediction = actions.add_parser("predict", help="Predict after the latest completed candle")
     prediction.add_argument("--data", "--csv", "--excel", dest="data", required=True)
     prediction.add_argument("--model", default="models/finance-v0.2")
@@ -91,6 +97,8 @@ def main():
                            hidden=tuple(args.hidden))
     elif args.action == "detect-trend":
         output = detect_trend(args.data, args.model)
+    elif args.action == "plot-trend":
+        output = plot_validation_trend(args.data, args.model, args.out, args.candles)
     else:
         config = json.loads((Path(args.model) / "config.json").read_text(encoding="utf-8"))
         if config.get("model_version") in {"0.5.0", "0.6.0"}:
