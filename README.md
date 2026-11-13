@@ -1,12 +1,11 @@
 # AI Finance
 
-**Current version: v0.6.0 — MACD-free, ATR-based three-class next-candle classifier.**
-The latest experiment uses 21 features per M15 candle plus five trend/ATR
-summaries (425 inputs) and predicts **down / neutral / up**; see
-[v0.6.0 details](#v060--macd-free-atr-three-class-classifier).
-Earlier experiments and checkpoints remain available.
+**Current development version: v0.7.0 — detection of the current XAUUSD M15 trend.**
+It labels the present state as **uptrend / downtrend**, using only closed historical candles.
+There is **no future forecast or reversal/entry signal** in v0.7; older v0.1–v0.6 experiments remain available.
+The v0.6.0 release remains documented below.
 
-A small **CPU-only financial neural network built from scratch in NumPy**. It learns to predict the next available 15-minute candle's direction from real MetaTrader OHLCV exports. This is a research/learning project—not a trading system or financial advice.
+A small **CPU-only financial neural network built from scratch in NumPy** using MetaTrader OHLCV candles. Earlier versions experimented with next-candle forecasts; v0.7 focuses only on recognizing the **current** market trend. This is a research/learning project—not a trading system or financial advice.
 
 ## v0.2: trend-aware experiment
 
@@ -279,3 +278,77 @@ better overall predictive performance**: validation loss and accuracy are
 slightly worse. The selected v0.6.0 run used seed **13**, epoch **3**.
 Neither the internal reserved holdout nor `data/final_test.csv` was used
 for selection/evaluation. These figures are **not** live trading results.
+
+## v0.7.0 — Current-trend recognition (no prediction)
+
+**Scope:** classify the current XAUUSD M15 regime as exactly **uptrend** or
+**downtrend** using only the candles that have already closed. No reversal
+detection, future-price targets, entry signals, or trading decisions.
+This is a **separate model and command**: v0.1–v0.6 checkpoints are untouched.
+
+### Indicators and input features
+
+| Indicator | Configuration | Purpose |
+| --- | --- | --- |
+| Bollinger Bands | **20 periods, 2 standard deviations** | %B, relative width, SMA20 middle-line slope |
+| Single moving average | **EMA10** | EMA slope, its distance from the Bollinger SMA20 middle line; report bullish/bearish line crossings |
+| Aroon Up / Down | **25 periods** (26 observed bars in the `ta` convention) | Recency of highs and lows; up/down spread |
+| ATR | **14 periods** (Wilder smoothing) | Volatility-adjusted strength and relative ATR input |
+
+The model also receives normalized OHLC returns, log tick volume, and real
+candle gaps. **15 features × 40 completed M15 candles = 600 inputs**.
+This new pipeline does **not** use MACD, RSI, or SMA50. Indicator calculations
+use pandas/NumPy, not an additional dependency; they are historical-only.
+The MLP defaults to **600 → 512 → 256 → 128 → 64 → 1** with a binary sigmoid
+output (custom NumPy backpropagation and AdamW). Hidden sizes can be adjusted.
+
+### Training-reference definition and important limitations
+
+There is no unique objective ground-truth label for 'current trend'.
+For this first experiment we assign an **explicit causal reference label**:
+run ordinary least squares on **log(close) for the trailing 32 completed bars**,
+ending at time `t`. Positive or zero slope → `uptrend`; negative slope →
+`downtrend`. No `t+1` candle, future extrema, or future ATR is used.
+
+**Crucial:** This tests whether the neural network can **reproduce a
+historical price-slope definition**, not whether its market interpretation
+is correct or whether future prices will rise/fall. The label is not derived
+from Aroon or EMA crossings, so the model is not merely copying those specific
+indicators; it is still learning a **constructed label from the same past data**.
+When the slope's net 32-bar move is smaller than **0.5 ATR14**, the report flags
+`weak_price_trend`, but outputs remain binary per specification. The sigmoid
+score is **uncalibrated**, not a reliable 80%-confidence promise.
+
+Use chronological **70% train / 15% validation / 15% reserved internal
+holdout** within `data/development.csv`. Scaling is fitted on training only;
+seed/epoch selection uses validation loss only. Neither the internal reserved
+holdout nor external `data/final_test.csv` is evaluated in training.
+Validation includes majority-class, previous-trend **persistence**, and EMA10
+vs Bollinger-middle baselines, so a high accuracy cannot be mistaken for an
+independent forecast result.
+
+### Commands
+
+```bash
+git pull origin main
+python -m finance_ai train-trend --csv data/development.csv \
+  --out models/finance-v0.7 --epochs 100 --seeds 13 42 97
+```
+
+To classify the **current last completed candle** after training (supply enough
+recent history to warm up Aroon25/BB20 and feed all 40 feature candles):
+
+```bash
+python -m finance_ai detect-trend --csv data/development.csv \
+  --model models/finance-v0.7
+```
+
+For a smaller CPU smoke test use `--epochs 2 --seeds 42 --hidden 64 32`
+with **a different output directory**; that checkpoint has a different
+architecture. `train-trend` writes `model.npz`, `config.json`,
+`preprocessing.json`, and `metrics.json`. The `detect-trend` JSON provides
+the trend, both uncalibrated scores, weak-trend flag, timestamp, indicator
+snapshot, and EMA10/SMA20 crossing direction. It assumes the supplied export
+contains **only closed candles**.
+
+**v0.8 reversal-point detection is intentionally out of scope.**

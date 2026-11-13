@@ -7,10 +7,11 @@ from .experiment import Settings, predict, train
 from .horizons import compare_horizons
 from .architectures import compare_architectures
 from .atr import train_atr, predict_atr, DEFAULT_HIDDEN, DEFAULT_ATR_MULTIPLIER
+from .trend_detection import train_trend, detect_trend, DEFAULT_HIDDEN as TREND_HIDDEN
 
 
 def main():
-    parser = argparse.ArgumentParser(description="AI Finance: CPU-only neural network v0.6")
+    parser = argparse.ArgumentParser(description="AI Finance: CPU-only neural network v0.7")
     actions = parser.add_subparsers(dest="action", required=True)
     training = actions.add_parser("train", help="Train and evaluate on chronological splits")
     training.add_argument("--data", "--csv", "--excel", dest="data", required=True, help="MetaTrader M15 .csv/.xlsx/.xls export")
@@ -48,6 +49,18 @@ def main():
                            help="Hidden widths, e.g. 512 256 128 64 (larger needs more CPU/RAM)")
     atr_train.add_argument("--atr-multiplier", type=float, default=DEFAULT_ATR_MULTIPLIER,
                            help="Neutral band as fraction of ATR14 at candle t")
+    trend_training = actions.add_parser("train-trend", help="Learn current up/down trend from past-only price reference")
+    trend_training.add_argument("--data", "--csv", "--excel", dest="data", required=True)
+    trend_training.add_argument("--out", default="models/finance-v0.7")
+    trend_training.add_argument("--epochs", type=int, default=100)
+    trend_training.add_argument("--batch-size", type=int, default=64)
+    trend_training.add_argument("--lr", type=float, default=0.001)
+    trend_training.add_argument("--patience", type=int, default=12)
+    trend_training.add_argument("--seeds", type=int, nargs="+", default=[13, 42, 97])
+    trend_training.add_argument("--hidden", type=int, nargs="+", default=list(TREND_HIDDEN))
+    trend_detection = actions.add_parser("detect-trend", help="Recognize current trend using completed candles")
+    trend_detection.add_argument("--data", "--csv", "--excel", dest="data", required=True)
+    trend_detection.add_argument("--model", default="models/finance-v0.7")
     prediction = actions.add_parser("predict", help="Predict after the latest completed candle")
     prediction.add_argument("--data", "--csv", "--excel", dest="data", required=True)
     prediction.add_argument("--model", default="models/finance-v0.2")
@@ -70,6 +83,14 @@ def main():
                                     seeds=tuple(args.seeds)),
                            hidden=tuple(args.hidden), atr_multiplier=args.atr_multiplier,
                            include_macd=False)
+    elif args.action == "train-trend":
+        output = train_trend(args.data, args.out,
+                           Settings(epochs=args.epochs, batch_size=args.batch_size,
+                                    lr=args.lr, patience=args.patience,
+                                    seeds=tuple(args.seeds)),
+                           hidden=tuple(args.hidden))
+    elif args.action == "detect-trend":
+        output = detect_trend(args.data, args.model)
     else:
         config = json.loads((Path(args.model) / "config.json").read_text(encoding="utf-8"))
         if config.get("model_version") in {"0.5.0", "0.6.0"}:
