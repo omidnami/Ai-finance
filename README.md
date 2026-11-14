@@ -1,6 +1,6 @@
 # AI Finance
 
-**Current development version: v1.2.0 — temporal encoder comparison.**
+**Current development version: v1.3.0 — four-timeframe CNN fusion.**
 The new model learns entry scores from historical TP/SL outcomes; earlier v0.x checkpoints and commands remain supported.
 
 A small **CPU-only financial neural network built from scratch in NumPy** using MetaTrader OHLCV candles. Earlier versions experimented with next-candle forecasts; v0.7 focuses only on recognizing the **current** market trend. This is a research/learning project—not a trading system or financial advice.
@@ -1028,3 +1028,53 @@ Replay assumptions remain independent overlapping hypothetical close
 fills, conservative ambiguous M1 stop, horizon timeout close, masked
 missing/pending outcomes, fixed costs only. A fresh test and realistic
 execution are necessary before assessing a usable trading edge.
+
+
+## v1.3 — four native timeframes, one entry decision
+
+Read the already-separated OHLCV files in `data/multi_tf`:
+`development_m1.csv`, `development_m5.csv`, `development_m15.csv`,
+`development_h1.csv`, and the four corresponding `final_test_*.csv`
+files. UTC Unix opening times, chronological unique rows, same broker,
+completed candles only. H1 timeframe accepts 60 or MT5 PERIOD_H1=16385.
+No data files are rewritten.
+
+Each branch sees 100 native completed candles by default (100–500
+configurable), with its own scaling fitted on training history. Four
+small causal CNN encoders fuse summaries before the six value outputs.
+Decisions are at M15 close; backward alignment uses candle closing times,
+not opening times, so an unfinished H1 candle cannot enter the model.
+Missing/stale last candles are skipped, not fabricated. Raw input windows
+and future horizons remain within chronological 70/15/15 M15 development
+blocks; causal indicator state can use earlier history.
+Insufficient shared history raises an error. The reserved holdout and
+external test are not evaluated during training.
+
+Two auxiliary heads learn maximum upward/downward price excursion over
+the next 20 M15 candles (log1p movement, SmoothL1, default weight 0.15).
+These are not first-touch probabilities or reliable future targets;
+they provide a secondary representation-learning objective. The six
+primary utility heads, loss aversion 1.1, targets 2.5/3.5/5, fixed SL 2,
+and zero-utility WAIT are unchanged from v1.2. No forced reversal
+rules, indicator gates or daily caps. Counter-move reporting remains
+descriptive. Default fixed cost zero is not a real execution model.
+
+```bash
+python -m finance_ai train-multi --data-dir data/multi_tf \
+  --lookback 100 --threads 4 --out models/finance-v1.3
+
+python -m finance_ai predict-multi --data-dir data/multi_tf \
+  --model models/finance-v1.3
+
+python -m finance_ai backtest-multi --data-dir data/multi_tf \
+  --model models/finance-v1.3 --out reports/v1.3-decisions.csv
+```
+
+Use a new directory for every lookback/seed experiment. The longer H1
+window reduces eligible samples; compare configurations on common
+validation timestamps. Reports include actual input row counts, synchronized
+candidate counts, risk-adjusted utility, excursion error and constant
+prior/WAIT baselines. Replay checks all four time ranges for overlap and
+excludes the incomplete final evaluation horizon. Repeatedly inspected
+historical test dates are not an untouched test. Costs, order execution,
+overlapping positions and genuine trading profitability are not modeled.
