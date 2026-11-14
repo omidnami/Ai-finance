@@ -17,10 +17,11 @@ from .history_chart import plot_history
 from .fixed_tpsl import run_fixed_tpsl
 from .decision_model import DecisionSettings, train_decision, predict_decision, backtest_decision
 from .value_model import register as register_value, dispatch as dispatch_value
+from .temporal_model import register as register_temporal, dispatch as dispatch_temporal
 
 
 def main():
-    parser = argparse.ArgumentParser(description="AI Finance: CPU-only neural network experiments + v1.1 risk-adjusted entry value")
+    parser = argparse.ArgumentParser(description="AI Finance: CPU-only neural network experiments + v1.2 temporal encoders")
     actions = parser.add_subparsers(dest="action", required=True)
     training = actions.add_parser("train", help="Train and evaluate on chronological splits")
     training.add_argument("--data", "--csv", "--excel", dest="data", required=True, help="MetaTrader M15 .csv/.xlsx/.xls export")
@@ -165,8 +166,11 @@ def main():
     decision_replay.add_argument("--model", default="models/finance-v1.0")
     decision_replay.add_argument("--out", default="reports/v1.0-decisions.csv")
     register_value(actions)
+    register_temporal(actions)
     args = parser.parse_args()
-    if args.action in {"train-value", "predict-value", "backtest-value"}:
+    if args.action in {"train-temporal", "predict-temporal", "backtest-temporal"}:
+        output = dispatch_temporal(args)
+    elif args.action in {"train-value", "predict-value", "backtest-value"}:
         output = dispatch_value(args)
     elif args.action == "train":
         output = train(args.data, args.out, Settings(epochs=args.epochs, batch_size=args.batch_size,

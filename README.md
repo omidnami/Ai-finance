@@ -1,6 +1,6 @@
 # AI Finance
 
-**Current development version: v1.1.0 — risk-adjusted learned entry value.**
+**Current development version: v1.2.0 — temporal encoder comparison.**
 The new model learns entry scores from historical TP/SL outcomes; earlier v0.x checkpoints and commands remain supported.
 
 A small **CPU-only financial neural network built from scratch in NumPy** using MetaTrader OHLCV candles. Earlier versions experimented with next-candle forecasts; v0.7 focuses only on recognizing the **current** market trend. This is a research/learning project—not a trading system or financial advice.
@@ -956,3 +956,75 @@ baselines. Use only a later M15 file for external replay. The previously
 viewed final_test.csv is a research comparison, not an untouched test.
 The utility model has not demonstrated profitability; use fresh data for
 independent evaluation before any real trading.
+
+
+## v1.2.0 — CNN, GRU and TCN temporal encoder comparison
+
+Three independent train-from-scratch CPU networks preserve each candle's
+position in the input sequence (100–500 M15 candles × 26 features).
+CNN learns local candle patterns with causal convolutions and pooling;
+GRU learns a recurrent sequence state; TCN uses residual dilated causal
+convolutions with a receptive field covering the requested input history.
+All use a temporal summary (last state, mean, four ordered segments),
+a small regularized dense head, and six risk-adjusted value outputs.
+All use identical v1.1 outcomes, chronological splits, train-only
+scaling, seed, loss objective and default risk settings from the last
+v1.1 experiment (loss aversion 1.1; targets 2.5, 3.5, 5; SL 2; 20-bar
+horizon; zero fixed round-trip cost unless specified). No daily quota,
+indicator-generated entries, or forced reversal rules. WAIT has zero utility.
+
+PyTorch is a new optional CPU dependency, used only for v1.2; this is not
+a pretrained model or an external AI service. Earlier NumPy commands
+do not require PyTorch and their checkpoints are unchanged.
+
+```bash
+git pull --ff-only origin main
+python -m pip install torch --index-url https://download.pytorch.org/whl/cpu
+
+python -m finance_ai train-temporal \
+  --csv data/development.csv \
+  --m1-csv data/final_test_m1.csv \
+  --architectures cnn gru tcn \
+  --lookback 100 --targets 2.5 3.5 5 --sl 2 \
+  --loss-aversion 1.1 --threads 4 \
+  --out models/finance-v1.2
+```
+
+Labels are prepared once and shared. Training defaults to 15 epochs per
+encoder, patience 4, 24 channels, batch size 128, AdamW, dropout, gradient
+clipping. CPU speed varies by machine; GRU and TCN may take longer than
+the earlier MLP. Output: one checkpoint directory (`cnn`, `gru`,
+`tcn`) per encoder and `comparison.json` in the requested output directory
+(which must not already exist). Each model selects its epoch by validation
+loss. The comparison ranks by validation loss and only suggests a further
+validation candidate if it beats both the constant training-prior loss
+and WAIT's zero utility. This is a single-seed exploratory comparison,
+not proof of an architecture's superiority or trading profitability.
+The reserved internal holdout and external test are not used during
+selection. For another lookback or seed, use a new output directory; a
+fair comparison across lookbacks should use common validation timestamps.
+
+Validation and replay also report a descriptive counter-move subgroup:
+selected direction opposite the trailing 20-bar close change, versus
+aligned. This is NOT a confirmed reversal label, an entry gate, or a
+claim of safe reversals. It only aids review of the learned entries.
+
+After selecting a candidate using validation, substitute its checkpoint
+directory (example: `tcn`) in:
+
+```bash
+python -m finance_ai predict-temporal \
+  --csv data/final_test.csv --model models/finance-v1.2/tcn
+
+python -m finance_ai backtest-temporal \
+  --csv data/final_test.csv \
+  --m1-csv data/final_test_m1.csv \
+  --model models/finance-v1.2/tcn \
+  --out reports/v1.2-tcn.csv
+```
+
+Do not tune architectures on the previously inspected final_test.csv.
+Replay assumptions remain independent overlapping hypothetical close
+fills, conservative ambiguous M1 stop, horizon timeout close, masked
+missing/pending outcomes, fixed costs only. A fresh test and realistic
+execution are necessary before assessing a usable trading edge.
