@@ -1,6 +1,6 @@
 # AI Finance
 
-**Current development version: v2.0.0 — future trend forecasting from scratch.**
+**Current development version: v2.1.0 — binary direction forecast comparison.**
 Earlier commands and checkpoints remain supported.
 
 A small **CPU-only financial neural network built from scratch in NumPy** using MetaTrader OHLCV candles. Earlier versions experimented with next-candle forecasts; v0.7 focuses only on recognizing the **current** market trend. This is a research/learning project—not a trading system or financial advice.
@@ -1115,3 +1115,44 @@ Use `predict-forecast` with a CSV ending in the latest completed M15
 candle for one live-style forecast. Evaluate on unseen dates before
 drawing conclusions; overlapping forecast windows are correlated.
 Do not tune repeatedly on external test.
+
+
+## v2.1 — binary trend forecast comparison
+
+Same M15 inputs and CNN as v2.0 with two output classes. Train four
+independent networks, one per horizon (4/8/16/32 M15 candles).
+The sign of the future least-squares slope defines DOWN/UP, including
+weak movement; only numerical zero slope (absolute normalized strength
+<= 1e-8) is excluded. This is not a prediction of TP/SL or closing-price
+direction. All models use identical eligible timestamps, purge using the
+longest requested horizon, and share the exclusion of exact ties.
+No class reweighting, no entry threshold, no sideways class.
+Strong/weak realized movements (one ATR threshold) are descriptive
+subgroups only and cannot be used to select live predictions.
+Confidence audits at 55/60/65/70% are descriptive, not entry rules.
+Validation reports class precision/recall, balanced accuracy, macro F1,
+log loss, constant training prior and past trend persistence. Select
+checkpoint by validation log loss per horizon. Rank absolute log loss
+improvement over each horizon's own prior; require positive improvement,
+balanced accuracy above 50%, and macro F1 above both baselines for a
+candidate for further validation. This is exploratory, not statistical proof.
+
+```bash
+python -m finance_ai train-direction --csv data/multi_tf/development_m15.csv \
+  --lookback 100 --horizons 4 8 16 32 --threads 4 \
+  --out models/finance-v2.1
+```
+
+Results are saved to comparison.json and h4/h8/h16/h32 subdirectories.
+Internal holdout and external test are not evaluated during selection.
+After choosing a candidate, substitute its actual checkpoint directory:
+
+```bash
+python -m finance_ai test-direction --csv data/multi_tf/final_test_m15.csv \
+  --model models/finance-v2.1/h8 --out reports/v2.1-h8.csv
+```
+
+Use predict-direction for a single completed-candle forecast.
+The test command checks chronological separation and uses the same
+longest-horizon/tie exclusions as the comparison. Previously inspected
+dates are not pristine test data. No trading decisions are generated.
