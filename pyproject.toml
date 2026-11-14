@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ai-finance"
-version = "0.9.0"
-description = "From-scratch NumPy MLP experiments with price-action setup/entry research"
+version = "1.0.0"
+description = "From-scratch NumPy MLP experiments with outcome-supervised entry decisions"
 requires-python = ">=3.10"
 dependencies = ["numpy>=1.24,<3", "pandas>=2.0,<3", "ta==0.11.0", "openpyxl>=3.1,<4", "xlrd>=2.0,<3"]
 

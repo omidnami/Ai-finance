@@ -1,7 +1,7 @@
 # AI Finance
 
-**Current development version: v0.9.0 — market context, setup quality and stop-entry paper simulation.**
-This version **combines the unchanged v0.7 current-trend and v0.8 confirmed-reversal checkpoints** with a new, transparent, Brooks-inspired decision/replay engine. No new neural weights are trained, and no live orders are sent. All earlier commands remain available.
+**Current development version: v1.0.0 — independent outcome-supervised decision network.**
+The new model learns entry scores from historical TP/SL outcomes; earlier v0.x checkpoints and commands remain supported.
 
 A small **CPU-only financial neural network built from scratch in NumPy** using MetaTrader OHLCV candles. Earlier versions experimented with next-candle forecasts; v0.7 focuses only on recognizing the **current** market trend. This is a research/learning project—not a trading system or financial advice.
 
@@ -811,3 +811,85 @@ not guaranteed broker fills. No spread, slippage, commissions, or tick
 path inside a single M1 minute; this is a **wick-first-touch signal
 audit**, not demonstrated executable profitability. No v0.7/v0.8
 weights, original signals, or old M15-only reports are changed.
+
+
+## v1.0.0 — independent learned BUY / SELL / WAIT
+
+Unlike v0.7-v0.9, this model does not reproduce trend/reversal reference
+rules or require their checkpoints. Every eligible completed M15 candle
+is considered. 26 causal numeric features per candle include OHLC deltas,
+log return/volume, candle anatomy, ATR, RSI, Bollinger, EMA, MACD, rolling
+range position and UTC cyclical time. They are **inputs, not entry gates**.
+Use 100 to 500 ordered history candles; a checkpoint has one fixed trained
+lookback. The default 100-candle CPU NumPy MLP is
+2600 → 128 → 64 → 32 → 2 independent sigmoid outcome heads.
+
+For each training candle, simulate both BUY and SELL at its close with
+TP=2.50 and SL=2.00 USD/oz. Search only subsequent M15 highs/lows for first
+touch, refining ambiguous candles with 15 matching M1 bars. Both
+directions are independently supervised; no indicators create the labels.
+Ambiguous M1 outcomes, missing/mismatched M1, unresolved and no-hit outcomes
+are masked rather than invented. Default outcome horizon is 20 observed
+M15 candles (configurable). This censoring can bias learned scores;
+they are conditional on known outcomes, not calibrated market probabilities.
+
+The decision chooses the greater positive estimated value
+score × (TP + SL) − SL − fixed round-trip cost, or WAIT if neither is
+positive. This is an economic rule on learned outputs, not a chart filter.
+With zero cost the score threshold is 2/4.5. No real order is placed.
+
+Development uses chronological 70/15/15 raw-candle blocks, with candidate
+windows and future labels kept inside each block. Fit input normalization
+on training rows only; select epoch by validation masked log loss;
+reserve the internal holdout. Validation includes constant training-prior,
+always-BUY and always-SELL comparisons. No external file is used in training.
+60 additional earlier M15 candles are required for feature warmup; e.g.
+100-window inference needs at least 160 completed candles total.
+A different lookback or TP/SL objective needs separate training/checkpoint.
+
+### Train
+
+```bash
+git pull --ff-only origin main
+python -m finance_ai train-decision \
+  --csv data/development.csv \
+  --m1-csv data/final_test_m1.csv \
+  --lookback 100 --tp 2.5 --sl 2 \
+  --out models/finance-v1.0
+```
+
+The 850-day M1 file is usable only if it covers the corresponding
+development and validation periods. Same broker and UTC candle-opening
+timestamps required. Use an alternate M1 export if coverage is missing.
+The output directory must not already contain a checkpoint. To compare
+another lookback, use e.g. `--lookback 200 --out models/finance-v1.0-lb200`
+and compare validation only, not repeatedly tune against external test data.
+Default epoch cap 30; early stopping patience 5. Results in
+`model.npz`, `config.json`, and `training.json`.
+
+### Infer and evaluate
+
+```bash
+python -m finance_ai predict-decision \
+  --csv data/final_test.csv --model models/finance-v1.0
+
+python -m finance_ai backtest-decision \
+  --csv data/final_test.csv \
+  --m1-csv data/final_test_m1.csv \
+  --model models/finance-v1.0 \
+  --out reports/v1.0-decisions.csv
+```
+
+Inference requires only M15 and the trained checkpoint, never M1 future
+data or a reference signal. Replay generates every decision before
+evaluating outcomes; one row per candidate candle, including WAIT,
+with companion summary JSON. External replay must be later than the
+entire development file. The already inspected final_test.csv is a
+research comparison, not a pristine final evaluation; reserve fresh data.
+Ambiguous M1 hits count as losses in conservative replay rates, whereas
+missing/mismatched data, timeouts and pending are reported separately and
+excluded from resolved rates. All signals are independent and may overlap.
+Close fill is hypothetical; no real bid/ask fills, gap execution,
+position sizing or account P&L. Fixed cost defaults to zero; use `--cost`
+during training to set a different economic threshold and report assumption.
+These outputs do not establish profitability.

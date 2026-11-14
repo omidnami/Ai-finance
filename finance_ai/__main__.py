@@ -15,10 +15,11 @@ from .reversal_walkforward import run_reversal_walkforward
 from .entry_engine import EntryRules, run_entries, inspect_last
 from .history_chart import plot_history
 from .fixed_tpsl import run_fixed_tpsl
+from .decision_model import DecisionSettings, train_decision, predict_decision, backtest_decision
 
 
 def main():
-    parser = argparse.ArgumentParser(description="AI Finance: CPU-only neural network experiments + v0.9 setup/entry research")
+    parser = argparse.ArgumentParser(description="AI Finance: CPU-only neural network experiments + v1.0 learned entry decisions")
     actions = parser.add_subparsers(dest="action", required=True)
     training = actions.add_parser("train", help="Train and evaluate on chronological splits")
     training.add_argument("--data", "--csv", "--excel", dest="data", required=True, help="MetaTrader M15 .csv/.xlsx/.xls export")
@@ -138,6 +139,30 @@ def main():
     prediction = actions.add_parser("predict", help="Predict after the latest completed candle")
     prediction.add_argument("--data", "--csv", "--excel", dest="data", required=True)
     prediction.add_argument("--model", default="models/finance-v0.2")
+    decision_train = actions.add_parser("train-decision", help="v1.0: train independent BUY/SELL outcome heads from M15 history and M1 first-touch labels")
+    decision_train.add_argument("--data", "--csv", "--excel", dest="data", required=True)
+    decision_train.add_argument("--m1-csv", required=True)
+    decision_train.add_argument("--out", default="models/finance-v1.0")
+    decision_train.add_argument("--lookback", type=int, default=100, help="M15 model input window (100..500)")
+    decision_train.add_argument("--tp", type=float, default=2.5)
+    decision_train.add_argument("--sl", type=float, default=2.0)
+    decision_train.add_argument("--horizon-candles", type=int, default=20)
+    decision_train.add_argument("--cost", type=float, default=0.0, help="Optional fixed round-trip USD/oz")
+    decision_train.add_argument("--m1-price-tolerance", type=float, default=0.02)
+    decision_train.add_argument("--epochs", type=int, default=30)
+    decision_train.add_argument("--batch-size", type=int, default=128)
+    decision_train.add_argument("--hidden", type=int, nargs="+", default=[128, 64, 32])
+    decision_train.add_argument("--lr", type=float, default=0.001)
+    decision_train.add_argument("--patience", type=int, default=5)
+    decision_train.add_argument("--seed", type=int, default=42)
+    decision_predict = actions.add_parser("predict-decision", help="v1.0: infer BUY/SELL/WAIT from latest closed M15 candle; no M1 future data")
+    decision_predict.add_argument("--data", "--csv", "--excel", dest="data", required=True)
+    decision_predict.add_argument("--model", default="models/finance-v1.0")
+    decision_replay = actions.add_parser("backtest-decision", help="v1.0: independent consecutive model decisions, followed by price outcome evaluation")
+    decision_replay.add_argument("--data", "--csv", "--excel", dest="data", required=True)
+    decision_replay.add_argument("--m1-csv", required=True)
+    decision_replay.add_argument("--model", default="models/finance-v1.0")
+    decision_replay.add_argument("--out", default="reports/v1.0-decisions.csv")
     args = parser.parse_args()
     if args.action == "train":
         output = train(args.data, args.out, Settings(epochs=args.epochs, batch_size=args.batch_size,
@@ -190,6 +215,16 @@ def main():
                                initial_equity=args.initial_equity),
                     max_steps=args.max_steps)
         return
+    elif args.action == "train-decision":
+        output = train_decision(args.data, args.m1_csv, args.out,
+            DecisionSettings(lookback=args.lookback, tp=args.tp, sl=args.sl, horizon=args.horizon_candles,
+                             cost=args.cost, tolerance=args.m1_price_tolerance, epochs=args.epochs,
+                             batch_size=args.batch_size, hidden=tuple(args.hidden), lr=args.lr,
+                             patience=args.patience, seed=args.seed))
+    elif args.action == "predict-decision":
+        output = predict_decision(args.data, args.model)
+    elif args.action == "backtest-decision":
+        output = backtest_decision(args.data, args.m1_csv, args.model, args.out)
     elif args.action == "backtest-fixed-tpsl":
         run_fixed_tpsl(args.data, args.signals, args.out,
                        tp=args.tp, sl=args.sl, max_holding_bars=args.max_holding_bars,
