@@ -132,6 +132,9 @@ def main():
     fixed.add_argument("--sl", type=float, default=2.0, help="Stop loss distance in USD per oz (default 2.0)")
     fixed.add_argument("--max-holding-bars", type=int, default=None,
                        help="Optional maximum future candles; default: until TP/SL or end of file")
+    fixed.add_argument("--m1-csv", help="Optional same-broker UTC M1 OHLC export to resolve first-hit ambiguity inside M15 candles")
+    fixed.add_argument("--m1-price-tolerance", type=float, default=0.02,
+                       help="Allowed absolute price discrepancy comparing reconstructed M1 bar with M15 (default 0.02 USD)")
     prediction = actions.add_parser("predict", help="Predict after the latest completed candle")
     prediction.add_argument("--data", "--csv", "--excel", dest="data", required=True)
     prediction.add_argument("--model", default="models/finance-v0.2")
@@ -189,7 +192,8 @@ def main():
         return
     elif args.action == "backtest-fixed-tpsl":
         run_fixed_tpsl(args.data, args.signals, args.out,
-                       tp=args.tp, sl=args.sl, max_holding_bars=args.max_holding_bars)
+                       tp=args.tp, sl=args.sl, max_holding_bars=args.max_holding_bars,
+                       m1_csv=args.m1_csv, m1_price_tolerance=args.m1_price_tolerance)
         return
     elif args.action == "plot-history":
         output = plot_history(args.data, args.reversals, args.out, setups=args.setups,

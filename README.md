@@ -759,3 +759,55 @@ executed trade P&L, or single-position cash exposure are modeled. A
 historical signal-close fill can be unavailable in real execution. Before
 claiming a strategy has edge, use genuinely new data: the original
 `final_test.csv` has already been inspected repeatedly.
+
+### Optional M1 intrabar disambiguation (no model retraining)
+
+**Keep M15 signals and the existing neural models exactly as they are.**
+The confirmation candle's timestamp in our files is the **M15 opening
+timestamp**, so its actual close/entry is **15 minutes later**.
+For **M1 review**, the first eligible minute starts at the timestamp of
+the **next M15 candle** (never the minutes inside the signal candle).
+
+Only a candle in which the **first M15 TP/SL touch is ambiguous** needs
+M1 inspection. M15 outcomes in which only TP or only SL was touched are
+already decidable without finer data. Within each ambiguous M15 candle,
+the M1 tester checks one-minute **HIGH/LOW shadows in chronological
+order** for the first touch; if **both** levels are hit in one minute,
+it is still ambiguous and counted as SL for the conservative rate.
+
+```bash
+git pull origin main
+python -m finance_ai backtest-fixed-tpsl \
+  --csv data/final_test.csv \
+  --signals reports/v0.9-entries.csv \
+  --m1-csv data/final_test_m1.csv \
+  --tp 2.5 --sl 2 \
+  --out reports/v0.9-fixed-tpsl-m1.csv
+```
+
+`--m1-csv` must use **M1 candles from the same broker and historical
+period**, with the same Unix-UTC timestamp convention and exact prices
+as the M15 file. Required columns: `time,open,high,low,close,timeframe`
+(`timeframe=1`; `volume` optional). CSV or Excel inputs supported.
+Timestamps must be ascending whole-minute Unix seconds; we **do not**
+auto-shift timezones or guess whether timestamps mean candle start/end.
+The M15 source still requires its existing `timeframe=15` schema.
+
+An ambiguous M15 candle is resolved using M1 **only if all 15 M1
+minute candles are present** and their aggregated OHLC matches the M15
+candle within a configurable tolerance (default **$0.02/oz**;
+`--m1-price-tolerance 0.05` to raise if justified by known export
+precision). If missing or mismatched, result becomes
+`M1_DATA_INCOMPLETE` or `M1_PRICE_MISMATCH`: **not counted** as win
+or loss. Report fields `m15_result_before_m1`, `m1_resolution`,
+`m1_first_touch_utc`, and `m1_bars_in_ambiguous_candle` show what
+happened. The summary includes `m15_originally_ambiguous`,
+`m1_resolved`, and `m1_unresolved_missing_or_mismatch`. This
+strict completeness check may leave legitimate low-activity minutes
+unresolved; it is conservative about dataset integrity.
+
+All trades remain **hypothetical fills at the M15 signal CLOSE**,
+not guaranteed broker fills. No spread, slippage, commissions, or tick
+path inside a single M1 minute; this is a **wick-first-touch signal
+audit**, not demonstrated executable profitability. No v0.7/v0.8
+weights, original signals, or old M15-only reports are changed.
