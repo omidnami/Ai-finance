@@ -652,3 +652,42 @@ used for v0.8 development discussion. It must **not** be represented as
 an untouched out-of-sample evaluation of v0.9. Use a new subsequent
 time period for an unbiased evaluation after freezing these rules.
 This project provides research tools, **not investment advice or real orders**.
+
+### Full offline interactive history chart (all ~7,000 test candles)
+
+The separate **visual-only** command `plot-history` combines the **existing
+reports**, not a new backtest. It displays *all original OHLC candles* and
+overlays v0.8 AI predictions (triangles), the v0.8 price-only reference
+(open circles), agreement between the two (gold stars), and the v0.9
+**queued/proposed setups** (diamonds). **No TP, SL, position execution,
+win/loss, R-multiples or hypothetical P&L are plotted or recalculated.**
+The v0.9 queued setup is **not necessarily a filled trade**.
+
+```bash
+git pull origin main
+python -m pip install -e '.[interactive]'
+
+python -m finance_ai plot-history \
+  --csv data/final_test.csv \
+  --reversals reports/v0.8-test-20.csv \
+  --setups reports/v0.9-entries.csv \
+  --out charts/finance-full-history.html
+
+xdg-open charts/finance-full-history.html
+```
+
+The `--setups` overlay is optional if you only want the v0.8 markers.
+The browser HTML is **fully offline** (Plotly bundled locally, **no CDN**);
+all candles are retained, but the first view zooms to the last **280**
+candles for readability. Use **mouse wheel zoom, drag-pan, legend toggles,
+date buttons and the bottom range slider** to inspect the entire history.
+Choose a different initial view with `--initial-candles 600`.
+The output size is several MB because Plotly is embedded for offline use.
+
+The command cross-checks timestamps from each report against the raw candle
+file, refusing to show mismatched datasets. Use the reports generated from
+**that exact same OHLC CSV**. The first indicator-warmup candles naturally
+have no markers; this does **not** mean they were tested.
+The figure is purely for human inspection and **does not set trading exits
+or test profitability**. Existing v0.9 paper risk settings were provisional
+research defaults, **not user-approved TP/SL rules**.

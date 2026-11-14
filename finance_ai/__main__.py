@@ -13,6 +13,7 @@ from .reversal_detection import train_reversal, detect_reversal, DEFAULT_HIDDEN 
 from .reversal_chart import plot_validation_reversals
 from .reversal_walkforward import run_reversal_walkforward
 from .entry_engine import EntryRules, run_entries, inspect_last
+from .history_chart import plot_history
 
 
 def main():
@@ -116,6 +117,12 @@ def main():
     replay.add_argument("--roundtrip-cost-units", type=float, default=0.0)
     replay.add_argument("--risk-budget-fraction", type=float, default=.005)
     replay.add_argument("--initial-equity", type=float, default=10000.0)
+    history = actions.add_parser("plot-history", help="Offline interactive full-history candlestick chart with existing v0.8/v0.9 markers; no TP/SL")
+    history.add_argument("--data", "--csv", "--excel", dest="data", required=True)
+    history.add_argument("--reversals", required=True, help="Existing v0.8 walkforward CSV")
+    history.add_argument("--setups", help="Optional existing v0.9 backtest entries CSV")
+    history.add_argument("--out", default="charts/finance-full-history.html")
+    history.add_argument("--initial-candles", type=int, default=280, help="Visible candles on first open; all data retained")
     prediction = actions.add_parser("predict", help="Predict after the latest completed candle")
     prediction.add_argument("--data", "--csv", "--excel", dest="data", required=True)
     prediction.add_argument("--model", default="models/finance-v0.2")
@@ -171,6 +178,9 @@ def main():
                                initial_equity=args.initial_equity),
                     max_steps=args.max_steps)
         return
+    elif args.action == "plot-history":
+        output = plot_history(args.data, args.reversals, args.out, setups=args.setups,
+                              initial_candles=args.initial_candles)
     elif args.action == "walkforward-reversals":
         result = run_reversal_walkforward(args.data, args.model, args.out,
                                           batch_candles=args.batch_candles,
