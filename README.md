@@ -1,7 +1,7 @@
 # AI Finance
 
-**Current development version: v1.3.0 — four-timeframe CNN fusion.**
-The new model learns entry scores from historical TP/SL outcomes; earlier v0.x checkpoints and commands remain supported.
+**Current development version: v2.0.0 — future trend forecasting from scratch.**
+Earlier commands and checkpoints remain supported.
 
 A small **CPU-only financial neural network built from scratch in NumPy** using MetaTrader OHLCV candles. Earlier versions experimented with next-candle forecasts; v0.7 focuses only on recognizing the **current** market trend. This is a research/learning project—not a trading system or financial advice.
 
@@ -1078,3 +1078,40 @@ prior/WAIT baselines. Replay checks all four time ranges for overlap and
 excludes the incomplete final evaluation horizon. Repeatedly inspected
 historical test dates are not an untouched test. Costs, order execution,
 overlapping positions and genuine trading profitability are not modeled.
+
+
+## v2.0 — future trend forecast (no trading)
+
+A separate small CPU CNN trained from scratch on M15 only. Its task is
+to classify the trend of the **next** H candles (default 8) as DOWN,
+SIDEWAYS or UP. The supervised label is the least-squares slope of the
+current close and next H closes, multiplied by H and normalized by
+ATR14 known at the decision close. +/-1 current ATR defines the default
+neutral band. This is an explicit operational definition of future trend,
+not a universal definition or a trading outcome. No TP, SL, entries,
+WAIT policy or auxiliary trading objective. Future gaps are excluded
+from labeled windows; input gaps are represented rather than filled.
+Inputs are 100 completed candles by default: relative OHLC, candle
+geometry, relative volatility/volume and time gaps. No absolute price
+or technical-indicator signals. Standardization uses training history
+only. Chronological development blocks 70/15/15 with raw windows and
+future targets isolated; causal feature state can retain earlier history.
+The last block is reserved and external test is not read in training.
+Checkpoint selection is by validation multiclass log loss, with class
+distribution, confusion matrix, accuracy, macro F1, a constant training
+prior and past-trend persistence baseline. Softmax scores are not
+guaranteed calibrated. Existing PyTorch CPU installation is sufficient.
+
+```bash
+python -m finance_ai train-forecast --csv data/multi_tf/development_m15.csv \
+  --lookback 100 --horizon 8 --neutral-atr 1 --threads 4 \
+  --out models/finance-v2.0
+
+python -m finance_ai test-forecast --csv data/multi_tf/final_test_m15.csv \
+  --model models/finance-v2.0 --out reports/v2.0-forecast.csv
+```
+
+Use `predict-forecast` with a CSV ending in the latest completed M15
+candle for one live-style forecast. Evaluate on unseen dates before
+drawing conclusions; overlapping forecast windows are correlated.
+Do not tune repeatedly on external test.

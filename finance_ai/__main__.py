@@ -19,10 +19,11 @@ from .decision_model import DecisionSettings, train_decision, predict_decision, 
 from .value_model import register as register_value, dispatch as dispatch_value
 from .temporal_model import register as register_temporal, dispatch as dispatch_temporal
 from .multi_tf_model import register as register_multi, dispatch as dispatch_multi
+from .forecast_model import register as register_forecast, dispatch as dispatch_forecast
 
 
 def main():
-    parser = argparse.ArgumentParser(description="AI Finance: CPU-only neural network experiments + v1.3 four-timeframe CNN")
+    parser = argparse.ArgumentParser(description="AI Finance: CPU-only neural network experiments + v2.0 future trend forecast")
     actions = parser.add_subparsers(dest="action", required=True)
     training = actions.add_parser("train", help="Train and evaluate on chronological splits")
     training.add_argument("--data", "--csv", "--excel", dest="data", required=True, help="MetaTrader M15 .csv/.xlsx/.xls export")
@@ -169,8 +170,11 @@ def main():
     register_value(actions)
     register_temporal(actions)
     register_multi(actions)
+    register_forecast(actions)
     args = parser.parse_args()
-    if args.action in {"train-multi", "predict-multi", "backtest-multi"}:
+    if args.action in {"train-forecast", "predict-forecast", "test-forecast"}:
+        output = dispatch_forecast(args)
+    elif args.action in {"train-multi", "predict-multi", "backtest-multi"}:
         output = dispatch_multi(args)
     elif args.action in {"train-temporal", "predict-temporal", "backtest-temporal"}:
         output = dispatch_temporal(args)
