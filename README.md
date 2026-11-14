@@ -1,6 +1,6 @@
 # AI Finance
 
-**Current development version: v1.0.0 — independent outcome-supervised decision network.**
+**Current development version: v1.1.0 — risk-adjusted learned entry value.**
 The new model learns entry scores from historical TP/SL outcomes; earlier v0.x checkpoints and commands remain supported.
 
 A small **CPU-only financial neural network built from scratch in NumPy** using MetaTrader OHLCV candles. Earlier versions experimented with next-candle forecasts; v0.7 focuses only on recognizing the **current** market trend. This is a research/learning project—not a trading system or financial advice.
@@ -893,3 +893,66 @@ Close fill is hypothetical; no real bid/ask fills, gap execution,
 position sizing or account P&L. Fixed cost defaults to zero; use `--cost`
 during training to set a different economic threshold and report assumption.
 These outputs do not establish profitability.
+
+
+## v1.1.0 — learn entry value, including WAIT
+
+A new independent CPU NumPy model using the same causal 26-feature M15
+pipeline. No v1.0 checkpoint is required or modified. All completed
+candidate candles are considered; no indicator condition or daily quota.
+For each candle the network learns the expected utility of BUY and SELL
+at each configurable target (default 2.5, 3.5, 5 USD/oz, six outputs).
+Default SL is 2 USD/oz. WAIT has utility zero; choose the highest positive
+estimated utility or WAIT. Training uses subsequent M15/M1 first-touch
+outcomes, not price-action rules. The score is utility, not a win probability.
+
+Default loss aversion is 1.5: utility equals hypothetical net movement for
+net gains, and 1.5 times net movement for net losses. Thus a -2 loss has
+utility -3 while +2.5 has utility +2.5. The factor is configurable, not a
+learned parameter or real alteration of P&L. Fixed round-trip cost defaults
+to zero; set `--cost` to a measured USD/oz cost. Conservative ambiguous M1
+outcomes are treated as SL in both training and replay; missing/mismatched
+data and end-of-file pending outcomes are masked. If no hit in 20 future
+observed M15 candles, exit hypothetically at the horizon candle close.
+All decisions are independently evaluated; overlapping trades, gaps,
+spread/slippage, portfolio sizing and actual broker fills are not modeled.
+No number of trades per day is enforced.
+
+The bounded utility target is normalized per action and learned via
+soft-label binary cross-entropy (its conditional mean minimizes expected
+loss); train-only prior initializes the output biases. Default smaller
+network 2600 → 64 → 32 → 6, learning rate 0.0003, input dropout 10% and
+early stopping on chronological validation loss attempt to reduce
+overfitting. Validation reports utility, actual hypothetical net movement,
+signal count, fixed-action and WAIT baselines, and a constant train-prior
+baseline. Input scalers use training rows only. Holdout remains reserved.
+A separate checkpoint is required for every trained history/target/risk
+configuration (100–500 history candles, plus 60 indicator warmup).
+
+```bash
+git pull --ff-only origin main
+python -m finance_ai train-value \
+  --csv data/development.csv \
+  --m1-csv data/final_test_m1.csv \
+  --lookback 100 --targets 2.5 3.5 5 --sl 2 \
+  --loss-aversion 1.5 \
+  --out models/finance-v1.1
+```
+
+```bash
+python -m finance_ai predict-value \
+  --csv data/final_test.csv --model models/finance-v1.1
+
+python -m finance_ai backtest-value \
+  --csv data/final_test.csv \
+  --m1-csv data/final_test_m1.csv \
+  --model models/finance-v1.1 \
+  --out reports/v1.1-decisions.csv
+```
+
+Replay produces one row per candidate with all six utility scores, chosen
+target and realized hypothetical outcome; the summary compares fixed-action
+baselines. Use only a later M15 file for external replay. The previously
+viewed final_test.csv is a research comparison, not an untouched test.
+The utility model has not demonstrated profitability; use fresh data for
+independent evaluation before any real trading.

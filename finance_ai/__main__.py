@@ -16,10 +16,11 @@ from .entry_engine import EntryRules, run_entries, inspect_last
 from .history_chart import plot_history
 from .fixed_tpsl import run_fixed_tpsl
 from .decision_model import DecisionSettings, train_decision, predict_decision, backtest_decision
+from .value_model import register as register_value, dispatch as dispatch_value
 
 
 def main():
-    parser = argparse.ArgumentParser(description="AI Finance: CPU-only neural network experiments + v1.0 learned entry decisions")
+    parser = argparse.ArgumentParser(description="AI Finance: CPU-only neural network experiments + v1.1 risk-adjusted entry value")
     actions = parser.add_subparsers(dest="action", required=True)
     training = actions.add_parser("train", help="Train and evaluate on chronological splits")
     training.add_argument("--data", "--csv", "--excel", dest="data", required=True, help="MetaTrader M15 .csv/.xlsx/.xls export")
@@ -163,8 +164,11 @@ def main():
     decision_replay.add_argument("--m1-csv", required=True)
     decision_replay.add_argument("--model", default="models/finance-v1.0")
     decision_replay.add_argument("--out", default="reports/v1.0-decisions.csv")
+    register_value(actions)
     args = parser.parse_args()
-    if args.action == "train":
+    if args.action in {"train-value", "predict-value", "backtest-value"}:
+        output = dispatch_value(args)
+    elif args.action == "train":
         output = train(args.data, args.out, Settings(epochs=args.epochs, batch_size=args.batch_size,
                         lr=args.lr, patience=args.patience, seeds=tuple(args.seeds)))
     elif args.action == "compare-horizons":
