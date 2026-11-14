@@ -691,3 +691,71 @@ have no markers; this does **not** mean they were tested.
 The figure is purely for human inspection and **does not set trading exits
 or test profitability**. Existing v0.9 paper risk settings were provisional
 research defaults, **not user-approved TP/SL rules**.
+
+### Fixed $2.50 TP / $2.00 SL: signal-close entry and wick-based first-hit review
+
+This is a **separate v0.9 research command**. It **does not use** the older
+`backtest-entries` stop-order triggers, ATR structural stops, 2R targets, or
+portfolio sizing. The existing neural checkpoints and prior commands remain
+unchanged.
+
+**Exact rules agreed for this experiment** (XAUUSD quoted in USD per troy ounce):
+
+- At the close of a confirmed signal candle `t`, record an **illustrative
+  paper entry at `CLOSE[t]`**. This is *not* a guaranteed real-world closing
+  price fill after the signal becomes known.
+- BUY: `TP = CLOSE[t] + 2.50`, `SL = CLOSE[t] - 2.00`.
+  SELL: `TP = CLOSE[t] - 2.50`, `SL = CLOSE[t] + 2.00`.
+- Search **only subsequent candles** `t+1, t+2, …`, and detect the **first
+  touch of the level with High/Low (shadows)**. Never use Close/Open to
+  decide whether the target or stop was touched; the signal candle's own
+  high/low does **not** count.
+- If the next observed candle hits **both TP and SL**, the actual sequence
+  is unknowable from OHLC. Record `AMBIGUOUS_SL_FIRST`, separately counted
+  as a loss in the **conservative** win rate. Do not call it an observed loss.
+- By default, leave each paper trade running until either TP/SL is hit or
+  the **file ends**. End-of-file unresolved trades are `PENDING_END`, not
+  forced losses or wins. To limit the scan to 20 subsequent candles, pass
+  `--max-holding-bars 20`; otherwise unhit outcomes within the horizon are
+  `NO_HIT` and excluded from resolved win rate.
+- Each candidate signal is evaluated **independently**, even if another
+  signal's hypothetical trade remains open. These are signal statistics,
+  **not a single-position account/portfolio simulation**.
+
+Run on **the exact same original OHLC dataset** as the saved reports:
+
+```bash
+git pull origin main
+python -m finance_ai backtest-fixed-tpsl \
+  --csv data/final_test.csv \
+  --signals reports/v0.9-entries.csv \
+  --tp 2.5 --sl 2.0 \
+  --out reports/v0.9-fixed-tpsl.csv
+```
+
+Alternatively, for all v0.8 agree-on-reversal signals without v0.9 context:
+
+```bash
+python -m finance_ai backtest-fixed-tpsl \
+  --csv data/final_test.csv \
+  --signals reports/v0.8-test-20.csv \
+  --out reports/v0.8-fixed-tpsl.csv
+```
+
+The **Excel-ready CSV** has one row per matched BUY/SELL signal: candle
+UTC, direction, context/quality/old-v0.9 decision, entry at signal close,
+absolute TP/SL price levels, time of first future wick hit, bars until
+resolution, `TP`/`SL`/`AMBIGUOUS_SL_FIRST`/`NO_HIT`/`PENDING_END`,
+per-oz gross signed move and MFE/MAE **up to first touch**. The accompanying
+`.summary.json` splits **all 270 matched signals**, v0.9 quality-approved
+setups, and previously queued v0.9 setups, further split into BUY/SELL.
+It reports all counts, number resolved and a **conservative resolved win
+rate** (`TP / (TP + SL + ambiguous)`). Existing v0.9 report
+`quality_reason == accepted` is used **only for the optional comparison**;
+it does not filter the full-signal total.
+
+No real fills, bid/ask spread, commissions, gap slips, swaptime fees,
+executed trade P&L, or single-position cash exposure are modeled. A
+historical signal-close fill can be unavailable in real execution. Before
+claiming a strategy has edge, use genuinely new data: the original
+`final_test.csv` has already been inspected repeatedly.

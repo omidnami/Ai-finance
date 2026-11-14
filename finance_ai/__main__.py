@@ -14,6 +14,7 @@ from .reversal_chart import plot_validation_reversals
 from .reversal_walkforward import run_reversal_walkforward
 from .entry_engine import EntryRules, run_entries, inspect_last
 from .history_chart import plot_history
+from .fixed_tpsl import run_fixed_tpsl
 
 
 def main():
@@ -123,6 +124,14 @@ def main():
     history.add_argument("--setups", help="Optional existing v0.9 backtest entries CSV")
     history.add_argument("--out", default="charts/finance-full-history.html")
     history.add_argument("--initial-candles", type=int, default=280, help="Visible candles on first open; all data retained")
+    fixed = actions.add_parser("backtest-fixed-tpsl", help="Replay existing v0.8/v0.9 signals: enter at signal CLOSE; test TP/SL with future High/Low")
+    fixed.add_argument("--data", "--csv", "--excel", dest="data", required=True, help="Original exact OHLC export used for signal report")
+    fixed.add_argument("--signals", required=True, help="Existing v0.9-entries.csv or v0.8-test-20.csv")
+    fixed.add_argument("--out", default="reports/fixed-tpsl-2.5-2.csv")
+    fixed.add_argument("--tp", type=float, default=2.5, help="Take profit distance in USD per oz (default 2.5)")
+    fixed.add_argument("--sl", type=float, default=2.0, help="Stop loss distance in USD per oz (default 2.0)")
+    fixed.add_argument("--max-holding-bars", type=int, default=None,
+                       help="Optional maximum future candles; default: until TP/SL or end of file")
     prediction = actions.add_parser("predict", help="Predict after the latest completed candle")
     prediction.add_argument("--data", "--csv", "--excel", dest="data", required=True)
     prediction.add_argument("--model", default="models/finance-v0.2")
@@ -177,6 +186,10 @@ def main():
                                risk_budget_fraction=args.risk_budget_fraction,
                                initial_equity=args.initial_equity),
                     max_steps=args.max_steps)
+        return
+    elif args.action == "backtest-fixed-tpsl":
+        run_fixed_tpsl(args.data, args.signals, args.out,
+                       tp=args.tp, sl=args.sl, max_holding_bars=args.max_holding_bars)
         return
     elif args.action == "plot-history":
         output = plot_history(args.data, args.reversals, args.out, setups=args.setups,
